@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "playlist": {
+    "name": "Teste do publicador",
+    "description": "Exemplo técnico para testar o aplicativo. Não é uma playlist aprovada.",
+    "public": false
+  },
+  "tracks": [
+    { "title": "Mitsubishi", "artists": ["Orochi", "Kizzy"] },
+    { "title": "Paypal", "artists": ["Teto"] },
+    { "title": "Blindado por Deus", "artists": ["MC Cabelinho"] }
+  ]
+}
