@@ -74,7 +74,7 @@ describe('classifyMatch', () => {
   });
 
   it('continua aceitando créditos de participação como mesmo título', () => {
-    for (const name of ['Paypal (feat. Kizzy)', 'Paypal (part. Kizzy)', 'Paypal (with Kizzy)', 'Paypal - feat. Kizzy', 'Paypal ft. Kizzy', 'Paypal (Participação Kizzy)']) {
+    for (const name of ['Paypal (feat. Kizzy)', 'Paypal (part. Kizzy)', 'Paypal - feat. Kizzy', 'Paypal ft. Kizzy', 'Paypal (Participação Kizzy)']) {
       expect(classifyMatch(req('Paypal', ['Teto']), [track(name, ['Teto', 'Kizzy'])]).status, name).toBe('exact');
     }
   });
@@ -82,6 +82,12 @@ describe('classifyMatch', () => {
   it('não corta títulos que contêm "with" ou "part" como palavra', () => {
     expect(strictTitle('Dance With Me')).toBe('dance with me');
     expect(classifyMatch(req('Dance', ['X']), [track('Dance With Me', ['X'])]).status).toBe('needs_confirmation');
+  });
+
+  it('"with" e "part." soltos não são tratados como crédito (re-verificação Codex)', () => {
+    for (const name of ['Paypal (With Orchestra)', 'Paypal (with Kizzy)', 'Paypal Part. II']) {
+      expect(classifyMatch(req('Paypal', ['Teto']), [track(name, ['Teto', 'Kizzy'])]).status, name).toBe('needs_confirmation');
+    }
   });
 
   it('ignora faixas indisponíveis', () => {

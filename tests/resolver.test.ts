@@ -39,7 +39,7 @@ describe('resolveTrack', () => {
 
   it('pede confirmação quando o URI aponta para outra versão do título do JSON (revisão Codex F2)', async () => {
     const { fake, client } = setup();
-    for (const [i, name] of ['Paypal - Ao Vivo', 'Paypal (Unplugged)'].entries()) {
+    for (const [i, name] of ['Paypal - Ao Vivo', 'Paypal (Unplugged)', 'Paypal (With Orchestra)'].entries()) {
       const t = track(name, ['Teto'], { id: `versao${i}`.padEnd(22, 'v') });
       fake.catalog = [t];
       const r = await resolveTrack(client, { index: 0, title: 'Paypal', artists: ['Teto'], spotifyUri: t.uri });

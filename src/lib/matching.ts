@@ -66,10 +66,11 @@ export function baseTitle(title: string): string {
   );
 }
 
-// Créditos de participação: "feat.", "ft.", "featuring", "with", "part." e "participação".
-// "with" só conta entre parênteses ("(with X)"); solto ele faz parte de títulos como "Dance With Me".
-const CREDIT = String.raw`(?:feat\.?|ft\.?|featuring|part\.|participa[cç][aã]o)`;
-const CREDIT_IN_BRACKETS = new RegExp(String.raw`[([{]\s*(?:${CREDIT}|with)\s[^)\]}]*[)\]}]`, 'gi');
+// Créditos de participação inequívocos: "feat.", "ft.", "featuring"; entre parênteses também
+// "part." e "participação". "with" fica de fora ("(With Orchestra)", "Dance With Me") e "part."
+// solto também ("Part. II"): nesses casos a diferença pede confirmação.
+const CREDIT = String.raw`(?:feat\.?|ft\.?|featuring)`;
+const CREDIT_IN_BRACKETS = new RegExp(String.raw`[([{]\s*(?:${CREDIT}|part\.|participa[cç][aã]o)\s[^)\]}]*[)\]}]`, 'gi');
 const CREDIT_SUFFIX = new RegExp(String.raw`(?:\s[-–—])?\s+${CREDIT}\s.*$`, 'i');
 
 /**
