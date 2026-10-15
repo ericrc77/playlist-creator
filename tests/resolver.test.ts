@@ -37,6 +37,25 @@ describe('resolveTrack', () => {
     expect(r.status).toBe('needs_confirmation');
   });
 
+  it('pede confirmação quando o URI aponta para outra versão do título do JSON (revisão Codex F2)', async () => {
+    const { fake, client } = setup();
+    for (const [i, name] of ['Paypal - Ao Vivo', 'Paypal (Unplugged)'].entries()) {
+      const t = track(name, ['Teto'], { id: `versao${i}`.padEnd(22, 'v') });
+      fake.catalog = [t];
+      const r = await resolveTrack(client, { index: 0, title: 'Paypal', artists: ['Teto'], spotifyUri: t.uri });
+      expect(r.status, name).toBe('needs_confirmation');
+      expect(r.selected).toBeUndefined();
+    }
+  });
+
+  it('aceita URI cuja faixa só acrescenta crédito de participação', async () => {
+    const { fake, client } = setup();
+    const t = track('Paypal (feat. Kizzy)', ['Teto', 'Kizzy'], { id: 'abcdefghijklmnopqrstuv' });
+    fake.catalog = [t];
+    const r = await resolveTrack(client, { index: 0, title: 'Paypal', artists: ['Teto'], spotifyUri: t.uri });
+    expect(r.status).toBe('exact');
+  });
+
   it('marca URI inexistente como não encontrada', async () => {
     const { client } = setup();
     const r = await resolveTrack(client, { index: 0, artists: [], spotifyUri: 'spotify:track:zzzzzzzzzzzzzzzzzzzzzz' });

@@ -47,6 +47,8 @@ const VERSION_MARKERS = [
   'sped up', 'slowed', 'reverb', 'instrumental', 'karaoke', 'clean', 'radio edit',
   'edit', 'extended', 'mix', 'remaster', 'remastered', 'demo', 'cover', 'video',
   'mashup', 'bootleg', 'acapella', 'a capella', 'piano', 'orchestral', 'session',
+  'unplugged', 'alternate', 'take', 'nightcore', 'rerecorded', 're recorded', 'stripped', 'rework',
+  'reprise', 'dub', 'lofi', 'lo fi', '8d', 'chopped', 'screwed', 'vip',
 ];
 
 export function versionMarkers(title: string): string[] {
@@ -64,6 +66,21 @@ export function baseTitle(title: string): string {
   );
 }
 
+// Créditos de participação: "feat.", "ft.", "featuring", "with", "part." e "participação".
+// "with" só conta entre parênteses ("(with X)"); solto ele faz parte de títulos como "Dance With Me".
+const CREDIT = String.raw`(?:feat\.?|ft\.?|featuring|part\.|participa[cç][aã]o)`;
+const CREDIT_IN_BRACKETS = new RegExp(String.raw`[([{]\s*(?:${CREDIT}|with)\s[^)\]}]*[)\]}]`, 'gi');
+const CREDIT_SUFFIX = new RegExp(String.raw`(?:\s[-–—])?\s+${CREDIT}\s.*$`, 'i');
+
+/**
+ * Título "estrito": remove só os créditos de participação. Qualquer outro complemento
+ * ("(Unplugged)", "- Alternate Take", "(In the Name of Love)") continua no título, para que
+ * uma diferença desconhecida exija confirmação em vez de virar escolha automática.
+ */
+export function strictTitle(title: string): string {
+  return normalize(title.replace(CREDIT_IN_BRACKETS, ' ').replace(CREDIT_SUFFIX, ''));
+}
+
 function artistMatches(requested: string, candidateArtists: string[]): boolean {
   const r = normalize(requested);
   return candidateArtists.some((c) => normalize(c) === r);
@@ -71,7 +88,10 @@ function artistMatches(requested: string, candidateArtists: string[]): boolean {
 
 export interface CandidateScore {
   track: SpotifyTrack;
+  /** Título base igual (ignora complementos): usado para ordenar e achar candidatas relevantes. */
   titleExact: boolean;
+  /** Título igual descontando só créditos de participação: exigido para escolha automática. */
+  titleStrict: boolean;
   allArtists: boolean;
   someArtist: boolean;
   versionMismatch: string[];
@@ -90,6 +110,7 @@ export function scoreCandidate(req: TrackRequest, track: SpotifyTrack): Candidat
   return {
     track,
     titleExact: baseTitle(reqTitle) === baseTitle(track.name) && baseTitle(reqTitle) !== '',
+    titleStrict: strictTitle(reqTitle) === strictTitle(track.name) && strictTitle(reqTitle) !== '',
     allArtists: req.artists.length > 0 && matched.length === req.artists.length,
     someArtist: matched.length > 0,
     versionMismatch,
@@ -106,7 +127,7 @@ const rank = (s: CandidateScore) =>
 
 /**
  * Decide o status de uma faixa. Só é "exact" quando:
- * - título base idêntico, todos os artistas pedidos presentes e nenhuma marcação de versão divergente;
+ * - título idêntico (descontando só créditos de participação), todos os artistas pedidos presentes e nenhuma marcação de versão divergente;
  * - e todas as candidatas exatas são a mesma gravação (mesma duração ±3s e mesma flag explicit).
  */
 export function classifyMatch(req: TrackRequest, results: SpotifyTrack[]): MatchResult {
@@ -115,7 +136,7 @@ export function classifyMatch(req: TrackRequest, results: SpotifyTrack[]): Match
 
   const scored = unique.map((t) => scoreCandidate(req, t)).sort((a, b) => rank(b) - rank(a));
   const candidates = scored.map((s) => s.track);
-  const exact = scored.filter((s) => s.titleExact && s.allArtists && s.versionMismatch.length === 0);
+  const exact = scored.filter((s) => s.titleStrict && s.allArtists && s.versionMismatch.length === 0);
 
   if (exact.length === 0) {
     const relevant = scored.filter((s) => s.someArtist || s.titleExact);
@@ -124,7 +145,9 @@ export function classifyMatch(req: TrackRequest, results: SpotifyTrack[]): Match
     }
     const best = relevant[0];
     const reason = best.titleExact && best.allArtists
-      ? `Só há versões diferentes (${best.versionMismatch.join(', ')}). Confirme qual usar.`
+      ? best.versionMismatch.length
+        ? `Só há versões diferentes (${best.versionMismatch.join(', ')}). Confirme qual usar.`
+        : 'O título tem um complemento diferente do pedido. Confirme qual usar.'
       : best.titleExact
         ? 'O título coincide, mas os artistas não batem exatamente. Confirme.'
         : 'Nenhuma coincidência exata de título. Confirme ou busque manualmente.';

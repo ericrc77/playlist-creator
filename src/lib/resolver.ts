@@ -21,13 +21,13 @@ async function resolveByUri(client: SpotifyClient, req: TrackRequest): Promise<M
     // O link é autoritativo, mas se o JSON também traz título/artistas e eles não batem, pedimos confirmação.
     if (req.title || req.artists.length) {
       const s = scoreCandidate(req, track);
-      const titleOk = !req.title || s.titleExact;
+      const titleOk = !req.title || (s.titleStrict && s.versionMismatch.length === 0);
       const artistsOk = req.artists.length === 0 || s.allArtists;
       if (!titleOk || !artistsOk) {
         return {
           status: 'needs_confirmation',
           candidates: [track],
-          reason: 'O link do Spotify aponta para uma faixa com título/artistas diferentes do JSON. Confirme.',
+          reason: 'O link do Spotify aponta para uma faixa com título, versão ou artistas diferentes do JSON. Confirme.',
         };
       }
     }

@@ -1,5 +1,5 @@
 import type { TrackRequest } from '../src/lib/contract';
-import { baseTitle, buildSearchQuery, classifyMatch, normalize } from '../src/lib/matching';
+import { baseTitle, buildSearchQuery, classifyMatch, normalize, strictTitle } from '../src/lib/matching';
 import { track } from './helpers';
 
 const req = (title: string, artists: string[]): TrackRequest => ({ index: 0, title, artists });
@@ -63,6 +63,25 @@ describe('classifyMatch', () => {
   it('retorna não encontrada sem resultados relevantes', () => {
     expect(classifyMatch(req('A', ['B']), []).status).toBe('not_found');
     expect(classifyMatch(req('A', ['B']), [track('Zzz', ['Y'])]).status).toBe('not_found');
+  });
+
+  it('não escolhe em silêncio complementos desconhecidos no título (revisão Codex F3)', () => {
+    for (const name of ['Paypal (Unplugged)', 'Paypal - Alternate Take', 'Paypal (Interlúdio)', 'Paypal - Parte 2', 'Paypal (Part 2)']) {
+      const r = classifyMatch(req('Paypal', ['Teto']), [track(name, ['Teto'])]);
+      expect(r.status, name).toBe('needs_confirmation');
+      expect(r.selected).toBeUndefined();
+    }
+  });
+
+  it('continua aceitando créditos de participação como mesmo título', () => {
+    for (const name of ['Paypal (feat. Kizzy)', 'Paypal (part. Kizzy)', 'Paypal (with Kizzy)', 'Paypal - feat. Kizzy', 'Paypal ft. Kizzy', 'Paypal (Participação Kizzy)']) {
+      expect(classifyMatch(req('Paypal', ['Teto']), [track(name, ['Teto', 'Kizzy'])]).status, name).toBe('exact');
+    }
+  });
+
+  it('não corta títulos que contêm "with" ou "part" como palavra', () => {
+    expect(strictTitle('Dance With Me')).toBe('dance with me');
+    expect(classifyMatch(req('Dance', ['X']), [track('Dance With Me', ['X'])]).status).toBe('needs_confirmation');
   });
 
   it('ignora faixas indisponíveis', () => {
