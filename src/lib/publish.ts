@@ -97,7 +97,8 @@ export async function publish(
   if (plan.uris.length === 0) throw new Error('Nenhuma faixa confirmada para publicar.');
   if (!plan.name.trim()) throw new Error('A playlist precisa de um nome.');
 
-  const owner = (await client.me()).id;
+  const me = await client.me();
+  const owner = me.account_id || me.id;
   const fp = fingerprint(plan);
   return serialized(`${owner}.${fp}`, () => publishLocked(client, plan, store, owner, fp, opts));
 }

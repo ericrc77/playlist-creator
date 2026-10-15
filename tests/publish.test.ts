@@ -153,6 +153,18 @@ describe('publish', () => {
     expect(fake.count('POST', '/me/playlists')).toBe(2);
   });
 
+  it('identifica a conta pelo account_id estável, não pelo id do perfil', async () => {
+    const { fake, store } = setup();
+    let profileId = 'id-antigo';
+    const fetchFn: typeof fetch = async (input, init) =>
+      new URL(String(input)).pathname === '/v1/me' ? jsonResponse(200, { id: profileId, account_id: 'conta-estavel' }) : fake.fetch(input, init);
+    const client = new SpotifyClient({ getAccessToken: async () => 'AT', onUnauthorized: async () => 'AT', fetchFn, sleep: async () => {} });
+    await publish(client, plan(), store);
+    profileId = 'id-novo';
+    expect(await publish(client, plan(), store)).toMatchObject({ kind: 'done', alreadyPublished: true });
+    expect(fake.count('POST', '/me/playlists')).toBe(1);
+  });
+
   it('não repete automaticamente a adição de faixas após 5xx', async () => {
     const { fake, client, store } = setup();
     fake.fail('POST /playlists/pl1/items', jsonResponse(503, {}));

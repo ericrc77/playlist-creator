@@ -44,6 +44,8 @@ export interface CreatedPlaylist {
 
 export interface SpotifyUser {
   id: string;
+  /** Identificador estável da conta (o `id` pode mudar; o Spotify recomenda `account_id` para vincular contas). */
+  account_id?: string;
   display_name?: string | null;
 }
 
