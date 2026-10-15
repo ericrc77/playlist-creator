@@ -23,6 +23,9 @@ revisão roda localmente:
 Codex não alterou arquivos. As correções foram feitas pelo Claude Code, cada uma com teste de regressão (os testes
 novos falham sem a correção e passam com ela).
 
+Texto original das três rodadas: [revisão completa](codex/revisao-1.md), [re-verificação](codex/revisao-2.md) e
+[checagem final](codex/revisao-3.md).
+
 **Linha de base (antes):** `npm ci` ok · `npm run typecheck` ok · `npm test` 66/66 · `npm run build` ok.
 **Depois:** typecheck ok · `npm test` 79/79 (7 arquivos) · build ok.
 
