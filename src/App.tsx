@@ -297,7 +297,7 @@ export function App({ config: initialConfig, session, local, createClient, navig
           {outcome?.kind === 'uncertain_create' && (
             <div className="warning" role="alert">
               <p>{outcome.message}</p>
-              <button onClick={() => doPublish(true)}>Conferi: criar a playlist</button>
+              <button onClick={() => doPublish(true)} disabled={publishing}>Conferi: criar a playlist</button>
             </div>
           )}
           {outcome?.kind === 'diverged' && (

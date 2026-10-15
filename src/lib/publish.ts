@@ -44,8 +44,11 @@ export function fingerprint(plan: PublishPlan): string {
   return h.toString(16).padStart(8, '0') + '-' + plan.uris.length;
 }
 
-export function loadJob(store: KVStore, fp: string): PublishJob | null {
-  const raw = store.getItem(JOB_PREFIX + fp);
+/** Jobs separados por conta do Spotify: o mesmo plano em outra conta é outra publicação. */
+const jobKey = (owner: string, fp: string) => `${JOB_PREFIX}${owner}.${fp}`;
+
+export function loadJob(store: KVStore, fp: string, owner: string): PublishJob | null {
+  const raw = store.getItem(jobKey(owner, fp));
   if (!raw) return null;
   try {
     return JSON.parse(raw) as PublishJob;
@@ -54,12 +57,29 @@ export function loadJob(store: KVStore, fp: string): PublishJob | null {
   }
 }
 
-function saveJob(store: KVStore, job: PublishJob) {
-  store.setItem(JOB_PREFIX + job.fingerprint, JSON.stringify(job));
+function saveJob(store: KVStore, owner: string, job: PublishJob) {
+  store.setItem(jobKey(owner, job.fingerprint), JSON.stringify(job));
 }
 
-export function forgetJob(store: KVStore, fp: string) {
-  store.removeItem(JOB_PREFIX + fp);
+export function forgetJob(store: KVStore, fp: string, owner: string) {
+  store.removeItem(jobKey(owner, fp));
+}
+
+// Publicações do mesmo job rodam uma de cada vez: na mesma aba (fila por chave) e entre abas
+// (Web Locks, quando o navegador oferece). Assim um clique duplo ou duas abas abertas não criam
+// duas playlists nem adicionam o mesmo lote duas vezes.
+const queues = new Map<string, Promise<unknown>>();
+
+function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  const run = locks ? () => locks.request(`mum.publish.${key}`, fn) : fn;
+  const next = (queues.get(key) ?? Promise.resolve()).catch(() => undefined).then(run);
+  queues.set(key, next);
+  const cleanup = () => {
+    if (queues.get(key) === next) queues.delete(key);
+  };
+  next.then(cleanup, cleanup);
+  return next;
 }
 
 export interface PublishOptions {
@@ -77,8 +97,21 @@ export async function publish(
   if (plan.uris.length === 0) throw new Error('Nenhuma faixa confirmada para publicar.');
   if (!plan.name.trim()) throw new Error('A playlist precisa de um nome.');
 
+  const owner = (await client.me()).id;
   const fp = fingerprint(plan);
-  const job: PublishJob = loadJob(store, fp) ?? { fingerprint: fp, createAttempted: false, addedCount: 0, done: false };
+  return serialized(`${owner}.${fp}`, () => publishLocked(client, plan, store, owner, fp, opts));
+}
+
+async function publishLocked(
+  client: SpotifyClient,
+  plan: PublishPlan,
+  store: KVStore,
+  owner: string,
+  fp: string,
+  opts: PublishOptions,
+): Promise<PublishOutcome> {
+  // Lido dentro da trava: outra execução pode ter acabado de criar a playlist ou adicionar faixas.
+  const job: PublishJob = loadJob(store, fp, owner) ?? { fingerprint: fp, createAttempted: false, addedCount: 0, done: false };
 
   if (job.done && job.playlistId && job.playlistUrl) {
     return { kind: 'done', playlistId: job.playlistId, playlistUrl: job.playlistUrl, added: job.addedCount, alreadyPublished: true };
@@ -92,7 +125,7 @@ export async function publish(
       };
     }
     job.createAttempted = true;
-    saveJob(store, job);
+    saveJob(store, owner, job);
     let created;
     try {
       created = await client.createPlaylist(plan.name, plan.description, plan.public);
@@ -100,14 +133,14 @@ export async function publish(
       // Erros 4xx (inclusive 429) garantem que nada foi criado: libera nova tentativa sem aviso.
       if (e instanceof SpotifyApiError && e.status >= 400 && e.status < 500) {
         job.createAttempted = false;
-        saveJob(store, job);
+        saveJob(store, owner, job);
       }
       throw e;
     }
     job.playlistId = created.id;
     job.playlistUrl = created.external_urls?.spotify ?? `https://open.spotify.com/playlist/${created.id}`;
     job.addedCount = 0;
-    saveJob(store, job);
+    saveJob(store, owner, job);
   } else {
     // Retomada: o estado real da playlist vale mais que o contador salvo.
     const current = await client.getPlaylistItemUris(job.playlistId);
@@ -119,7 +152,7 @@ export async function publish(
       };
     }
     job.addedCount = current.length;
-    saveJob(store, job);
+    saveJob(store, owner, job);
   }
 
   const playlistId = job.playlistId!;
@@ -128,7 +161,7 @@ export async function publish(
     const batch = plan.uris.slice(job.addedCount, job.addedCount + ADD_ITEMS_BATCH);
     await client.addItems(playlistId, batch, job.addedCount);
     job.addedCount += batch.length;
-    saveJob(store, job);
+    saveJob(store, owner, job);
     opts.onProgress?.(job.addedCount, plan.uris.length);
   }
 
@@ -142,7 +175,7 @@ export async function publish(
     };
   }
   job.done = true;
-  saveJob(store, job);
+  saveJob(store, owner, job);
   return { kind: 'done', playlistId, playlistUrl: job.playlistUrl!, added: final.length, alreadyPublished: false };
 }
 

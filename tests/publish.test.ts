@@ -59,7 +59,7 @@ describe('publish', () => {
     const c2 = new SpotifyClient({ getAccessToken: async () => 'AT', onUnauthorized: async () => 'AT', fetchFn: fake.fetch, sleep: async () => {} });
     await expect(publish(c2, p, store)).rejects.toMatchObject({ kind: 'network' });
     expect(fake.playlists.get('pl1')!.items).toHaveLength(100);
-    expect(loadJob(store, fingerprint(p))).toMatchObject({ playlistId: 'pl1', addedCount: 100, done: false });
+    expect(loadJob(store, fingerprint(p), 'eric')).toMatchObject({ playlistId: 'pl1', addedCount: 100, done: false });
 
     const out = await publish(c2, p, store);
     expect(out).toMatchObject({ kind: 'done', added: 150 });
@@ -114,6 +114,50 @@ describe('publish', () => {
     fake.playlists.get('pl1')!.items = ['spotify:track:intrusa'];
     const out = await publish(client, p, store);
     expect(out.kind).toBe('diverged');
+  });
+
+  it('duas publicações simultâneas do mesmo plano criam uma única playlist (revisão Codex F1)', async () => {
+    const { fake, client, store } = setup();
+    const p = plan(150);
+    const [a, b] = await Promise.all([publish(client, p, store), publish(client, p, store)]);
+    expect(fake.count('POST', '/me/playlists')).toBe(1);
+    expect(fake.playlists.get('pl1')!.items).toEqual(p.uris);
+    expect([a.kind, b.kind]).toEqual(['done', 'done']);
+  });
+
+  it('clique duplo em "criar mesmo assim" após criação incerta não duplica (revisão Codex F1)', async () => {
+    const { fake, client, store } = setup();
+    fake.fail('POST /me/playlists', 'network');
+    await expect(publish(client, plan(), store)).rejects.toMatchObject({ kind: 'network' });
+    const [a, b] = await Promise.all([
+      publish(client, plan(), store, { confirmRecreate: true }),
+      publish(client, plan(), store, { confirmRecreate: true }),
+    ]);
+    expect(fake.count('POST', '/me/playlists')).toBe(2); // a tentativa sem resposta + uma única recriação
+    expect(fake.playlists.size).toBe(1);
+    expect(fake.count('POST', '/playlists/pl1/items')).toBe(1);
+    expect([a.kind, b.kind]).toEqual(['done', 'done']);
+  });
+
+  it('não reaproveita o job de outra conta do Spotify (revisão Codex F4)', async () => {
+    const { fake, store } = setup();
+    let user = 'conta-a';
+    const fetchFn: typeof fetch = async (input, init) =>
+      new URL(String(input)).pathname === '/v1/me' ? jsonResponse(200, { id: user }) : fake.fetch(input, init);
+    const client = new SpotifyClient({ getAccessToken: async () => 'AT', onUnauthorized: async () => 'AT', fetchFn, sleep: async () => {} });
+    const first = await publish(client, plan(), store);
+    user = 'conta-b';
+    const second = await publish(client, plan(), store);
+    expect(second).toMatchObject({ kind: 'done', alreadyPublished: false });
+    expect(second.kind === 'done' && first.kind === 'done' && second.playlistId !== first.playlistId).toBe(true);
+    expect(fake.count('POST', '/me/playlists')).toBe(2);
+  });
+
+  it('não repete automaticamente a adição de faixas após 5xx', async () => {
+    const { fake, client, store } = setup();
+    fake.fail('POST /playlists/pl1/items', jsonResponse(503, {}));
+    await expect(publish(client, plan(), store)).rejects.toMatchObject({ kind: 'server' });
+    expect(fake.count('POST', '/playlists/pl1/items')).toBe(1);
   });
 
   it('recusa publicar sem faixas', async () => {
