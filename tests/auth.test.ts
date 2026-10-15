@@ -63,6 +63,22 @@ describe('completeLogin', () => {
     await expect(completeLogin(cfg, `${cfg.redirectUri}?error=access_denied&state=${state}`, store)).rejects.toThrow(/recusou/);
   });
 
+  it('confere o state antes de tratar um retorno de erro (revisão Codex F5)', async () => {
+    const { store } = await setup();
+    await expect(completeLogin(cfg, `${cfg.redirectUri}?error=access_denied`, store)).rejects.toThrow(/state/);
+    await expect(completeLogin(cfg, `${cfg.redirectUri}?error=access_denied&state=outro`, store)).rejects.toThrow(/state/);
+  });
+
+  it('mantém os escopos quando a resposta não traz `scope` (revisão Codex F6)', async () => {
+    const { store, state } = await setup();
+    const login = vi.fn(async () => jsonResponse(200, { access_token: 'AT', refresh_token: 'RT', expires_in: 3600 }));
+    const t = await completeLogin(cfg, `${cfg.redirectUri}?code=C&state=${state}`, store, login as unknown as typeof fetch, () => 0);
+    expect(missingScopes(t)).toEqual([]);
+    const refresh = vi.fn(async () => jsonResponse(200, { access_token: 'AT2', expires_in: 3600 }));
+    const r = await refreshTokens(cfg, { ...t, scope: 'playlist-modify-private' }, store, refresh as unknown as typeof fetch, () => 0);
+    expect(r.scope).toBe('playlist-modify-private');
+  });
+
   it('mantém o refresh token anterior quando o Spotify não envia outro', async () => {
     const store = new MemoryStore();
     const fetchFn = vi.fn(async () => jsonResponse(200, { access_token: 'AT2', expires_in: 3600, scope: '' }));

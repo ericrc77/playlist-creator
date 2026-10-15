@@ -90,15 +90,17 @@ export async function completeLogin(
   store.removeItem(STATE_KEY);
   store.removeItem(VERIFIER_KEY);
 
+  // O state é conferido antes de tudo, inclusive antes de tratar `error`: um retorno forjado
+  // não deve ser apresentado como resposta legítima do Spotify.
+  if (!expectedState || params.get('state') !== expectedState || !verifier) {
+    throw new AuthError('Falha de verificação de segurança (state). Tente conectar novamente.');
+  }
   const error = params.get('error');
   if (error) {
     throw new AuthError(error === 'access_denied' ? 'Você recusou a autorização no Spotify.' : `O Spotify retornou erro: ${error}`);
   }
   const code = params.get('code');
   if (!code) throw new AuthError('Retorno do Spotify sem código de autorização.');
-  if (!expectedState || params.get('state') !== expectedState || !verifier) {
-    throw new AuthError('Falha de verificação de segurança (state). Tente conectar novamente.');
-  }
 
   const res = await fetchFn(TOKEN_URL, {
     method: 'POST',
@@ -111,7 +113,7 @@ export async function completeLogin(
       code_verifier: verifier,
     }),
   });
-  const tokens = await readTokenResponse(res, now, undefined);
+  const tokens = await readTokenResponse(res, now, undefined, SCOPES.join(' '));
   saveTokens(store, tokens);
   return tokens;
 }
@@ -133,12 +135,17 @@ export async function refreshTokens(
       client_id: cfg.clientId,
     }),
   });
-  const tokens = await readTokenResponse(res, now, current.refreshToken);
+  const tokens = await readTokenResponse(res, now, current.refreshToken, current.scope);
   saveTokens(store, tokens);
   return tokens;
 }
 
-async function readTokenResponse(res: Response, now: () => number, previousRefresh?: string): Promise<Tokens> {
+async function readTokenResponse(
+  res: Response,
+  now: () => number,
+  previousRefresh: string | undefined,
+  previousScope: string,
+): Promise<Tokens> {
   if (!res.ok) {
     let detail = '';
     try {
@@ -160,7 +167,8 @@ async function readTokenResponse(res: Response, now: () => number, previousRefre
     // O Spotify pode não devolver um refresh token novo; nesse caso, mantém o anterior.
     refreshToken: body.refresh_token ?? previousRefresh,
     expiresAt: now() + body.expires_in * 1000,
-    scope: body.scope ?? '',
+    // Sem `scope` na resposta, os escopos não mudaram (RFC 6749 §5.1).
+    scope: body.scope ?? previousScope,
   };
 }
 
