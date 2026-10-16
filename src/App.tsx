@@ -58,6 +58,8 @@ export function App({ config, session, local, client, token, onLogout, navigate 
   // pode coincidir com a de mesma posição depois de colar outra.
   const searchSeq = useRef(new Map<number, number>());
   const searchCounter = useRef(0);
+  /** Conferência de visibilidade em voo; muda ao começar outra ou ao trocar de playlist. */
+  const recheckRun = useRef(0);
   const loadedText = useRef<string | null>(null);
   const run = useRef(0);
 
@@ -147,6 +149,8 @@ export function App({ config, session, local, client, token, onLogout, navigate 
     searchSeq.current.clear();
     setAttempted(false);
     setRechecked(false);
+    recheckRun.current++; // uma conferência em voo da playlist anterior não mexe mais na tela
+    setPublishing(false);
   }
 
   /** Invalida a busca manual em voo da faixa e devolve o número da próxima. */
@@ -256,17 +260,20 @@ export function App({ config, session, local, client, token, onLogout, navigate 
     if (outcome?.kind !== 'done') return;
     const { playlistId } = outcome;
     const wantPublic = frozenPlan.current?.public ?? meta.public;
+    const id = ++recheckRun.current;
+    const current = () => recheckRun.current === id;
     setPublishing(true);
     setRechecked(false);
     setPublishError(null);
     try {
       const visibility = await ensureVisibility(client, playlistId, wantPublic);
+      if (!current()) return;
       setOutcome((prev) => (prev?.kind === 'done' && prev.playlistId === playlistId ? { ...prev, visibility } : prev));
       setRechecked(true);
     } catch (e) {
-      setPublishError((e as Error).message);
+      if (current()) setPublishError((e as Error).message);
     } finally {
-      setPublishing(false);
+      if (current()) setPublishing(false);
     }
   }
 
@@ -311,7 +318,9 @@ export function App({ config, session, local, client, token, onLogout, navigate 
               <ul>{skipped.map((r) => <li key={r.req.index}>{describeRequest(r.req)}</li>)}</ul>
             </details>
           )}
-          <button className="secondary" onClick={reset}>Nova playlist</button>
+          <button className="secondary" onClick={reset} disabled={publishing}>
+            Nova playlist
+          </button>
         </section>
       </main>
     );

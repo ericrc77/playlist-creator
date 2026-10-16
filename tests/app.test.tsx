@@ -346,6 +346,31 @@ describe('App', () => {
     expect(screen.getByRole('region', { name: 'Resultado' })).toHaveTextContent('visibilidade não confirmada');
   });
 
+  it('durante a conferência, "Nova playlist" fica desabilitada e a resposta não vaza para a próxima (revisão Codex STATE-3)', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    fake.createAs = true;
+    fake.ignoreVisibilityChange = true;
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await waitFor(() => expect(publishButton()).toBeEnabled());
+    await user.click(publishButton());
+    await screen.findByText(/manteve a playlist pública/);
+
+    let release!: () => void;
+    fake.hold = (key) => (key === 'GET /playlists/pl1' ? new Promise<void>((r) => (release = r)) : undefined);
+    await user.click(screen.getByRole('button', { name: 'Conferir visibilidade de novo' }));
+    await waitFor(() => expect(release).toBeDefined());
+    expect(screen.getByRole('button', { name: 'Nova playlist' })).toBeDisabled();
+
+    fake.hold = undefined;
+    release();
+    await screen.findByRole('status');
+    expect(screen.getByRole('button', { name: 'Nova playlist' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Nova playlist' }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('JSON da playlist')).toBeEnabled();
+  });
+
   it('Sair chama o logout', async () => {
     const { onLogout, user } = setup();
     await user.click(screen.getByRole('button', { name: 'Sair' }));
