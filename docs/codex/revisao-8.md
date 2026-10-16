@@ -9,14 +9,14 @@ What this change does: it fixes the three reported result-screen issues without 
 
 ## Recheck of prior findings
 
-- **VIS-1 — FIXED.** Confirmed states now say “playlist pública” or “playlist não pública”; mismatch wording also avoids treating `public:false` as Spotify’s stronger “private” state. The required sentence appears exactly at [src/App.tsx:521:521](../../src/App.tsx).
-  - **Would the new test fail without the fix?** Yes. The test at [tests/app.test.tsx:299:299](../../tests/app.test.tsx) fails with the old “fora do seu perfil” result text. The updated symmetric mismatch test also fails with the old “privada” wording.
+- **VIS-1 — FIXED.** Confirmed states now say “playlist pública” or “playlist não pública”; mismatch wording also avoids treating `public:false` as Spotify’s stronger “private” state. The required sentence appears exactly at [src/App.tsx:521](../../src/App.tsx).
+  - **Would the new test fail without the fix?** Yes. The test at [tests/app.test.tsx:299](../../tests/app.test.tsx) fails with the old “fora do seu perfil” result text. The updated symmetric mismatch test also fails with the old “privada” wording.
 
-- **STATE-1 — FIXED.** A new attempt clears `rechecked`, and an `unknown` result cannot show the success status ([src/App.tsx:260:260](../../src/App.tsx), [src/App.tsx:294:294](../../src/App.tsx)).
-  - **Would the new test fail without the fix?** Yes against `0d79574`: the stale status remains after the failed recheck. The test at [tests/app.test.tsx:330:330](../../tests/app.test.tsx) verifies the visible result, although either the reset or the new `unknown` condition is independently enough to satisfy that assertion.
+- **STATE-1 — FIXED.** A new attempt clears `rechecked`, and an `unknown` result cannot show the success status ([src/App.tsx:260](../../src/App.tsx), [src/App.tsx:294](../../src/App.tsx)).
+  - **Would the new test fail without the fix?** Yes against `0d79574`: the stale status remains after the failed recheck. The test at [tests/app.test.tsx:330](../../tests/app.test.tsx) verifies the visible result, although either the reset or the new `unknown` condition is independently enough to satisfy that assertion.
 
-- **STATE-2 — FIXED.** The button calls `ensureVisibility()` directly and only updates the existing outcome’s visibility ([src/App.tsx:255:255](../../src/App.tsx)). It cannot create a playlist or add tracks even when the persisted job is missing.
-  - **Would the new test fail without the fix?** Yes. Clearing the saved job would make the previous `publish(...retryVisibility)` route create another playlist; [tests/app.test.tsx:310:310](../../tests/app.test.tsx) checks all relevant POST counts.
+- **STATE-2 — FIXED.** The button calls `ensureVisibility()` directly and only updates the existing outcome’s visibility ([src/App.tsx:255](../../src/App.tsx)). It cannot create a playlist or add tracks even when the persisted job is missing.
+  - **Would the new test fail without the fix?** Yes. Clearing the saved job would make the previous `publish(...retryVisibility)` route create another playlist; [tests/app.test.tsx:310](../../tests/app.test.tsx) checks all relevant POST counts.
 
 The original title is preserved, including an initial `alreadyPublished:true` outcome, because rechecking only spreads the existing outcome and changes `visibility`.
 
@@ -24,12 +24,12 @@ The original title is preserved, including an initial `alreadyPublished:true` ou
 
 **Must fix**
 
-1. **VIS-2 — Medium — The editor still asserts profile visibility** ([src/App.tsx:385:385](../../src/App.tsx))
+1. **VIS-2 — Medium — The editor still asserts profile visibility** ([src/App.tsx:385](../../src/App.tsx))
    - **Reproduction:** Select the public option before publishing. The UI says “Aparece no seu perfil” and “Qualquer pessoa pode encontrar a playlist no seu perfil.”
    - **Problem:** This violates the explicit requirement never to assert profile appearance. Spotify’s `public` field does not confirm that claim.
    - **Fix:** Describe the option as “Playlist pública” / “Playlist não pública” and explain only the confirmed `public` behavior. Add a test covering the public selector text.
 
-2. **STATE-3 — Medium — A late recheck can contaminate the next playlist’s state** ([src/App.tsx:265:265](../../src/App.tsx), [src/App.tsx:269:269](../../src/App.tsx), [src/App.tsx:314:314](../../src/App.tsx))
+2. **STATE-3 — Medium — A late recheck can contaminate the next playlist’s state** ([src/App.tsx:265](../../src/App.tsx), [src/App.tsx:269](../../src/App.tsx), [src/App.tsx:314](../../src/App.tsx))
    - **Reproduction:** Start a slow recheck, click “Nova playlist” while it is running, and begin publishing the next playlist. When the old request finishes, it unconditionally sets `rechecked=true` and `publishing=false`.
    - **Problem:** The new result may display a recheck-success message that belongs to the old playlist. It can also re-enable UI while the new publication is still running. The playlist-ID guard protects `outcome`, but not these two state variables.
    - **Fix:** At minimum, disable “Nova playlist” while `publishing`. A request-generation guard covering all three completion updates would also make the async state robust. Add a delayed-recheck/reset regression test.
