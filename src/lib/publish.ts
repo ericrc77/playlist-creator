@@ -94,6 +94,8 @@ function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
 export interface PublishOptions {
   /** O usuário confirmou que verificou o Spotify e quer criar mesmo após uma tentativa incerta. */
   confirmRecreate?: boolean;
+  /** O usuário pediu para conferir a visibilidade de novo (vale também para jobs antigos sem o campo). */
+  retryVisibility?: boolean;
   onProgress?: (added: number, total: number) => void;
 }
 
@@ -126,8 +128,9 @@ async function publishLocked(
   if (job.done && job.playlistId && job.playlistUrl) {
     let visibility: Visibility = job.visibility ?? 'unknown';
     // Só tenta de novo o que não foi confirmado. Visibilidade já confirmada não é tocada (o usuário
-    // pode tê-la mudado no Spotify depois), nem a de jobs antigos, que não registravam o campo.
-    if (job.visibility === 'unknown' || job.visibility === 'mismatch') {
+    // pode tê-la mudado no Spotify depois), nem a de jobs antigos, que não registravam o campo, a menos que o usuário peça.
+    const unconfirmed = job.visibility === 'unknown' || job.visibility === 'mismatch';
+    if (unconfirmed || (opts.retryVisibility && job.visibility === undefined)) {
       visibility = await ensureVisibility(client, job.playlistId, plan.public);
       job.visibility = visibility;
       saveJob(store, owner, job);

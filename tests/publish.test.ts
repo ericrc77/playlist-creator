@@ -228,6 +228,23 @@ describe('privacidade depois de publicar', () => {
     expect(await publish(client, plan(2), store)).toMatchObject({ alreadyPublished: true, visibility: 'corrected' });
   });
 
+  it('job antigo sem o campo de visibilidade: só confere quando o usuário pede', async () => {
+    const { fake, client, store } = setup();
+    await publish(client, plan(2), store);
+    const fp = fingerprint(plan(2));
+    const legacy = loadJob(store, fp, 'eric')!;
+    delete legacy.visibility; // como os jobs gravados antes deste campo existir
+    store.setItem(`mum.job.eric.${fp}`, JSON.stringify(legacy));
+    fake.playlists.get('pl1')!.public = true;
+
+    expect(await publish(client, plan(2), store)).toMatchObject({ alreadyPublished: true, visibility: 'unknown' });
+    expect(fake.count('PUT', '/playlists/pl1')).toBe(0);
+
+    expect(await publish(client, plan(2), store, { retryVisibility: true })).toMatchObject({ alreadyPublished: true, visibility: 'corrected' });
+    expect(fake.playlists.get('pl1')!.public).toBe(false);
+    expect(fake.count('POST', '/me/playlists')).toBe(1);
+  });
+
   it('visibilidade já confirmada não é mexida de novo', async () => {
     const { fake, client, store } = setup();
     expect(await publish(client, plan(2), store)).toMatchObject({ visibility: 'ok' });

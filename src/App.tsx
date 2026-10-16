@@ -52,7 +52,10 @@ export function App({ config, session, local, client, token, onLogout, navigate 
   const frozenPlan = useRef<PublishPlan | null>(null);
   // Busca manual em voo por faixa: uma resposta só vale se for a última pedida e se nada foi
   // escolhido ou publicado desde então.
+  // Os números vêm de um contador que nunca volta a zero: uma busca de uma playlist anterior não
+  // pode coincidir com a de mesma posição depois de colar outra.
   const searchSeq = useRef(new Map<number, number>());
+  const searchCounter = useRef(0);
   const loadedText = useRef<string | null>(null);
   const run = useRef(0);
 
@@ -145,7 +148,7 @@ export function App({ config, session, local, client, token, onLogout, navigate 
 
   /** Invalida a busca manual em voo da faixa e devolve o número da próxima. */
   function nextSearch(index: number) {
-    const seq = (searchSeq.current.get(index) ?? 0) + 1;
+    const seq = ++searchCounter.current;
     searchSeq.current.set(index, seq);
     return seq;
   }
@@ -219,7 +222,7 @@ export function App({ config, session, local, client, token, onLogout, navigate 
     });
   }
 
-  async function doPublish(confirmRecreate = false) {
+  async function doPublish(confirmRecreate = false, retryVisibility = false) {
     frozenPlan.current ??= {
       name: meta.name.trim(),
       description: meta.description.trim(),
@@ -231,7 +234,7 @@ export function App({ config, session, local, client, token, onLogout, navigate 
     setAttempted(true);
     setPublishError(null);
     try {
-      const result = await publish(client, plan, local, { confirmRecreate, onProgress: (added, total) => setProgress({ added, total }) });
+      const result = await publish(client, plan, local, { confirmRecreate, retryVisibility, onProgress: (added, total) => setProgress({ added, total }) });
       setOutcome(result);
       if (result.kind === 'done') session.removeItem(DRAFT_KEY);
     } catch (e) {
@@ -267,7 +270,7 @@ export function App({ config, session, local, client, token, onLogout, navigate 
                 : 'fora do seu perfil'
               : 'visibilidade não confirmada'}
           </p>
-          <VisibilityNote outcome={outcome} wantPublic={meta.public} onRetry={() => doPublish()} busy={publishing} />
+          <VisibilityNote outcome={outcome} wantPublic={meta.public} onRetry={() => doPublish(false, true)} busy={publishing} />
           <a className="button" href={outcome.playlistUrl} target="_blank" rel="noreferrer">
             Abrir no Spotify
           </a>

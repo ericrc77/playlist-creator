@@ -184,6 +184,42 @@ describe('App', () => {
     expect(fake.playlists.size).toBe(1);
   });
 
+  it('busca manual de uma playlist cancelada não invade a próxima (revisão Codex NEW-APP-1)', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [
+      track('Paypal', ['Teto'], { explicit: true }),
+      track('Paypal', ['Teto'], { explicit: false }),
+      track('Lenta', ['Antiga']),
+    ];
+    const held = new Map<string, () => void>();
+    fake.hold = (key, url) => {
+      const q = url.searchParams.get('q') ?? '';
+      return key === 'GET /search' && (q === 'lenta' || q === 'nova') ? new Promise<void>((r) => held.set(q, r)) : undefined;
+    };
+    const one = (name: string) => JSON.stringify({ schema_version: '1.0', playlist: { name }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] });
+    const search = async (q: string) => {
+      const box = screen.getByLabelText('Busca manual');
+      await user.clear(box);
+      await user.type(box, q);
+      await user.click(screen.getByRole('button', { name: 'Buscar' }));
+      await waitFor(() => expect(held.has(q)).toBe(true));
+    };
+
+    await paste(user, one('Primeira'));
+    await waitFor(() => expect(screen.getByTestId('track-0')).toHaveTextContent('Precisa de confirmação'));
+    await search('lenta');
+
+    await user.click(screen.getByRole('button', { name: 'Cancelar e colar outra playlist' }));
+    await paste(user, one('Segunda'));
+    await waitFor(() => expect(screen.getByTestId('track-0')).toHaveTextContent('Precisa de confirmação'));
+    await search('nova');
+
+    held.get('lenta')!(); // a busca da playlist cancelada chega agora
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByDisplayValue('Segunda')).toBeInTheDocument();
+    expect(screen.getByTestId('track-0')).not.toHaveTextContent('Lenta');
+  });
+
   it('visibilidade não confirmada não é apresentada como fato e pode ser conferida de novo (revisão Codex PUB-1)', async () => {
     const { fake, user } = setup();
     fake.catalog = [track('Paypal', ['Teto'])];
