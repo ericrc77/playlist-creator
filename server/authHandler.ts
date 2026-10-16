@@ -30,6 +30,12 @@ export interface SessionPayload {
   scope: string;
 }
 
+/** Conteúdo cifrado: além do refresh token, a validade, conferida no servidor (não só pelo navegador). */
+interface SealedPayload extends SessionPayload {
+  /** epoch ms; renovada a cada uso, como o Max-Age do cookie */
+  exp: number;
+}
+
 export interface AccessTokenResponse {
   accessToken: string;
   expiresAt: number;
@@ -79,24 +85,27 @@ async function aesKey(secret: string): Promise<CryptoKey> {
   return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
 }
 
-export async function sealSession(secret: string, payload: SessionPayload): Promise<string> {
+export async function sealSession(secret: string, payload: SessionPayload, now = Date.now()): Promise<string> {
+  const sealed: SealedPayload = { rt: payload.rt, scope: payload.scope, exp: now + COOKIE_MAX_AGE * 1000 };
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await aesKey(secret), new TextEncoder().encode(JSON.stringify(payload)));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await aesKey(secret), new TextEncoder().encode(JSON.stringify(sealed)));
   const out = new Uint8Array(iv.length + ct.byteLength);
   out.set(iv);
   out.set(new Uint8Array(ct), iv.length);
   return b64url(out);
 }
 
-export async function openSession(secret: string, sealed: string): Promise<SessionPayload | null> {
+export async function openSession(secret: string, sealed: string, now = Date.now()): Promise<SessionPayload | null> {
   try {
     const data = fromB64url(sealed);
     if (data.length < 13) return null;
     const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: data.slice(0, 12) }, await aesKey(secret), data.slice(12));
-    const p = JSON.parse(new TextDecoder().decode(pt)) as SessionPayload;
-    return typeof p.rt === 'string' && p.rt ? p : null;
+    const p = JSON.parse(new TextDecoder().decode(pt)) as Partial<SealedPayload>;
+    // Sem `exp` (formato antigo) ou vencido: uma cópia antiga do cookie não vale para sempre.
+    if (typeof p.rt !== 'string' || !p.rt || typeof p.exp !== 'number' || p.exp <= now) return null;
+    return { rt: p.rt, scope: typeof p.scope === 'string' ? p.scope : '' };
   } catch {
-    return null; // adulterado, segredo trocado ou formato antigo
+    return null; // adulterado ou segredo trocado
   }
 }
 
@@ -117,6 +126,10 @@ export async function handleAuth(request: Request, action: string, env: AuthEnv)
   const problem = csrfProblem(request, url);
   if (problem) return problem;
 
+  // Sair só apaga o cookie: não depende de Client ID nem de SESSION_SECRET e precisa funcionar
+  // mesmo com o servidor mal configurado.
+  if (action === 'logout') return json(200, { ok: true }, { 'Set-Cookie': setCookie(url, '', 0) });
+
   if (!env.clientId) return fail(500, 'config', 'VITE_SPOTIFY_CLIENT_ID não está configurado no servidor.');
   if (!env.sessionSecret || env.sessionSecret.length < 32) {
     return fail(500, 'config', 'SESSION_SECRET não está configurado no servidor (mínimo de 32 caracteres).');
@@ -129,9 +142,6 @@ export async function handleAuth(request: Request, action: string, env: AuthEnv)
   const clear = { 'Set-Cookie': setCookie(url, '', 0) };
 
   switch (action) {
-    case 'logout':
-      return json(200, { ok: true }, clear);
-
     case 'exchange': {
       let body: { code?: unknown; codeVerifier?: unknown };
       try {
@@ -157,12 +167,14 @@ export async function handleAuth(request: Request, action: string, env: AuthEnv)
 
     case 'refresh': {
       const sealed = readCookie(request, name);
-      const session = sealed ? await openSession(env.sessionSecret, sealed) : null;
+      const session = sealed ? await openSession(env.sessionSecret, sealed, now()) : null;
       if (!session) return fail(401, 'no_session', 'Conecte o Spotify.', sealed ? clear : {});
       const res = await spotifyToken(fetchFn, { grant_type: 'refresh_token', refresh_token: session.rt, client_id: env.clientId });
       if (!res.ok) {
-        // invalid_grant = acesso revogado ou refresh token expirado: a sessão acabou.
-        if (res.status === 400 || res.status === 401) return fail(401, 'no_session', 'Sessão expirada. Conecte o Spotify novamente.', clear);
+        // Só invalid_grant (acesso revogado, refresh token vencido ou já substituído) encerra a
+        // sessão. invalid_client e afins são erro de configuração: o cookie continua válido e volta
+        // a funcionar quando a configuração for corrigida.
+        if (res.error === 'invalid_grant') return fail(401, 'no_session', 'Sessão expirada. Conecte o Spotify novamente.', clear);
         return fail(502, 'spotify', res.message);
       }
       return issue(url, env, now, res.body, res.body.refresh_token ?? session.rt, session.scope);
@@ -183,7 +195,7 @@ interface SpotifyTokenBody {
 async function spotifyToken(
   fetchFn: typeof fetch,
   params: Record<string, string>,
-): Promise<{ ok: true; body: SpotifyTokenBody } | { ok: false; status: number; message: string }> {
+): Promise<{ ok: true; body: SpotifyTokenBody } | { ok: false; status: number; error: string; message: string }> {
   let res: Response;
   try {
     res = await fetchFn(SPOTIFY_TOKEN_URL, {
@@ -192,17 +204,19 @@ async function spotifyToken(
       body: new URLSearchParams(params),
     });
   } catch {
-    return { ok: false, status: 502, message: 'Falha de conexão com o Spotify.' };
+    return { ok: false, status: 502, error: 'network', message: 'Falha de conexão com o Spotify.' };
   }
   if (!res.ok) {
     let detail = '';
+    let error = '';
     try {
-      const b = (await res.json()) as { error?: string; error_description?: string };
-      detail = b.error_description || b.error || '';
+      const b = (await res.json()) as { error?: unknown; error_description?: unknown };
+      error = typeof b.error === 'string' ? b.error : '';
+      detail = (typeof b.error_description === 'string' && b.error_description) || error;
     } catch {
       /* sem corpo JSON */
     }
-    return { ok: false, status: res.status, message: `O Spotify recusou o acesso (${res.status}${detail ? `: ${detail}` : ''}).` };
+    return { ok: false, status: res.status, error, message: `O Spotify recusou o acesso (${res.status}${detail ? `: ${detail}` : ''}).` };
   }
   return { ok: true, body: (await res.json()) as SpotifyTokenBody };
 }
@@ -210,7 +224,7 @@ async function spotifyToken(
 async function issue(url: URL, env: AuthEnv, now: () => number, body: SpotifyTokenBody, rt: string, previousScope: string) {
   // Sem `scope` na resposta, os escopos não mudaram (RFC 6749 §5.1).
   const scope = body.scope ?? previousScope;
-  const sealed = await sealSession(env.sessionSecret, { rt, scope });
+  const sealed = await sealSession(env.sessionSecret, { rt, scope }, now());
   const out: AccessTokenResponse = { accessToken: body.access_token, expiresAt: now() + body.expires_in * 1000, scope };
   return json(200, out, { 'Set-Cookie': setCookie(url, sealed, COOKIE_MAX_AGE) });
 }

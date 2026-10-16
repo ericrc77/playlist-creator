@@ -44,6 +44,22 @@ describe('cookie cifrado', () => {
     const tampered = sealed.slice(0, -2) + (sealed.endsWith('A') ? 'B' : 'A') + sealed.slice(-1);
     expect(await openSession(SECRET, tampered)).toBeNull();
   });
+
+  it('a validade fica dentro do cookie: cópia vencida é recusada pelo servidor', async () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const sealed = await sealSession(SECRET, { rt: 'RT', scope: '' }, 0);
+    expect(await openSession(SECRET, sealed, 179 * DAY)).not.toBeNull();
+    expect(await openSession(SECRET, sealed, 181 * DAY)).toBeNull();
+  });
+
+  it('recusa cookie no formato antigo, sem validade', async () => {
+    const raw = new TextEncoder().encode(JSON.stringify({ rt: 'RT', scope: '' }));
+    const key = await crypto.subtle.importKey('raw', await crypto.subtle.digest('SHA-256', new TextEncoder().encode(SECRET)), 'AES-GCM', false, ['encrypt']);
+    const iv = new Uint8Array(12);
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, raw));
+    const legacy = Buffer.from([...iv, ...ct]).toString('base64url');
+    expect(await openSession(SECRET, legacy)).toBeNull();
+  });
 });
 
 describe('/api/auth/exchange', () => {
@@ -108,7 +124,7 @@ describe('/api/auth/refresh', () => {
     expect(await res.json()).toMatchObject({ accessToken: 'AT2', scope: 'a b' });
     expect(Object.fromEntries(s.calls[0].body)).toEqual({ grant_type: 'refresh_token', refresh_token: 'RT1', client_id: 'c'.repeat(32) });
     const rotated = cookieFrom(res).split(';')[0].split('=')[1];
-    expect((await openSession(SECRET, rotated))?.rt).toBe('RT2');
+    expect((await openSession(SECRET, rotated, 1000))?.rt).toBe('RT2');
   });
 
   it('mantém o refresh token anterior quando o Spotify não manda outro', async () => {
@@ -116,7 +132,7 @@ describe('/api/auth/refresh', () => {
     const s = spotify([ok({ access_token: 'AT2', expires_in: 3600 })]);
     const res = await handleAuth(req(PROD, 'refresh', { cookie }), 'refresh', env(s.fetchFn));
     const sealed = cookieFrom(res).split(';')[0].split('=')[1];
-    expect((await openSession(SECRET, sealed))?.rt).toBe('RT1');
+    expect((await openSession(SECRET, sealed, 1000))?.rt).toBe('RT1');
   });
 
   it('sem cookie: 401 sem chamar o Spotify', async () => {
@@ -132,6 +148,28 @@ describe('/api/auth/refresh', () => {
     const res = await handleAuth(req(PROD, 'refresh', { cookie }), 'refresh', env(s.fetchFn));
     expect(res.status).toBe(401);
     expect(cookieFrom(res)).toContain('Max-Age=0');
+  });
+
+  it.each([
+    ['invalid_client (Client ID errado no servidor)', 400, 'invalid_client'],
+    ['invalid_request', 400, 'invalid_request'],
+    ['401 sem invalid_grant', 401, 'invalid_client'],
+  ])('erro de configuração %s: 502 e mantém o cookie', async (_n, status, error) => {
+    const cookie = await loggedCookie();
+    const s = spotify([new Response(JSON.stringify({ error }), { status })]);
+    const res = await handleAuth(req(PROD, 'refresh', { cookie }), 'refresh', env(s.fetchFn));
+    expect(res.status).toBe(502);
+    expect(res.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('cookie vencido: 401, apaga o cookie e não chama o Spotify', async () => {
+    const cookie = await loggedCookie(); // selado em now = 1000
+    const s = spotify([]);
+    const later: AuthEnv = { ...env(s.fetchFn), now: () => 1000 + 181 * 24 * 60 * 60 * 1000 };
+    const res = await handleAuth(req(PROD, 'refresh', { cookie }), 'refresh', later);
+    expect(res.status).toBe(401);
+    expect(cookieFrom(res)).toContain('Max-Age=0');
+    expect(s.calls).toHaveLength(0);
   });
 
   it('falha temporária do Spotify: 502 e mantém o cookie', async () => {
@@ -168,5 +206,18 @@ describe('proteções', () => {
   it('logout apaga o cookie', async () => {
     const res = await handleAuth(req(PROD, 'logout'), 'logout', env(spotify([]).fetchFn));
     expect(cookieFrom(res)).toMatch(/^__Host-mum_rt=; .*Max-Age=0/);
+  });
+
+  it('logout funciona mesmo com o servidor sem Client ID ou SESSION_SECRET', async () => {
+    const res = await handleAuth(req(PROD, 'logout'), 'logout', { clientId: '', sessionSecret: '' });
+    expect(res.status).toBe(200);
+    expect(cookieFrom(res)).toMatch(/^__Host-mum_rt=; .*Max-Age=0/);
+  });
+
+  it('logout continua exigindo POST, X-MUM e mesma origem', async () => {
+    const r = req(PROD, 'logout', { headers: { origin: 'https://malicioso.example' } });
+    const res = await handleAuth(r, 'logout', { clientId: '', sessionSecret: '' });
+    expect(res.status).toBe(403);
+    expect(res.headers.get('set-cookie')).toBeNull();
   });
 });
