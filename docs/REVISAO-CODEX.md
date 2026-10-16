@@ -91,3 +91,28 @@ função da Vercel com `Request`/`Response` padrão; rewrite que preserva `/api/
 **Pendências:**
 - A última correção (NEW-AUTH-4) não passou por nova rodada do Codex.
 - Testado no navegador real: login com o Spotify em `http://127.0.0.1:5173` (antes destas correções).
+
+### 2026-10-16 · Textos da tela de resultado (após o teste real com o Spotify)
+
+**Contexto:** no primeiro teste real, o Spotify manteve pública uma playlist pedida fora do perfil, e ignorou também a
+correção. O app detectou e avisou corretamente (`mismatch`), mas dois textos estavam ruins: a linha de resumo dizia
+"visibilidade não confirmada" (o valor errado tinha sido confirmado) e, depois de "Conferir visibilidade de novo", o
+título virava "Essa playlist já estava publicada". Pedido do usuário: corrigir os dois textos sem mudar a lógica de
+publicação, com a frase "O Spotify manteve a playlist pública, apesar da solicitação de privacidade." e sem afirmar que
+a playlist aparece no perfil.
+
+Texto original do Codex: [revisão](codex/revisao-7.md) e [verificação](codex/revisao-8.md).
+
+**Resultado:** typecheck ok · `npm test` 136/136 · build ok. `src/lib` não foi alterado.
+
+| ID | Sev. | Achado do Codex | Veredito | Correção |
+|----|------|-----------------|----------|----------|
+| VIS-1 | alta | Estados confirmados ainda diziam "no/fora do seu perfil", mas a API só confirma o campo `public`. | Procede | A tela de resultado diz "pública"/"não pública". |
+| STATE-1 | média | Uma segunda conferência que falhasse deixava o aviso de sucesso anterior. | Procede | O aviso é limpo a cada conferência e só aparece quando o Spotify respondeu. |
+| STATE-2 | média | A reconferência passava por `publish()`; se o job salvo tivesse sumido, ela podia criar outra playlist. | Procede | O botão chama só `ensureVisibility` (ler e corrigir `public`): não cria playlist nem adiciona faixas. |
+| STATE-3 | média | (verificação) Tocar em "Nova playlist" durante uma conferência deixava o estado dela vazar para a próxima. | Procede | "Nova playlist" fica desabilitada durante a conferência, e respostas de uma playlist anterior são ignoradas. |
+| VIS-2 | média | (verificação) A opção do formulário ainda diz "Aparece no seu perfil" / "Qualquer pessoa pode encontrar a playlist no seu perfil". | Pendente | Fora do escopo pedido (os dois textos do resultado); aguarda decisão do usuário. |
+
+**Decisão aceita pelo Codex:** como o botão não passa mais por `publish()`, o campo de visibilidade salvo no job não é
+atualizado por ele. Uma nova publicação do mesmo plano ainda reconfere `unknown`/`mismatch`. A opção `retryVisibility`
+de `src/lib/publish.ts` deixou de ser usada pela tela, mas foi mantida para não alterar `src/lib`.

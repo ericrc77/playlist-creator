@@ -9,17 +9,17 @@ What this change does: it adds the requested mismatch wording and preserves the 
 
 **Must fix**
 
-1. **VIS-1 — High — Confirmed states still claim more than the API confirms** ([src/App.tsx:504](../../src/App.tsx), [src/App.tsx:529](../../src/App.tsx))
+1. **VIS-1 — High — Confirmed states still claim more than the API confirms** ([src/App.tsx:504:504](../../src/App.tsx), [src/App.tsx:529:529](../../src/App.tsx))
    - **Reproduction:** An `ok` or `corrected` result renders “no seu perfil” or “fora do seu perfil”, although the response only confirms the `public` boolean. For a public request returning `mismatch`, `public:false` is also described as fully “privada”, despite the app’s own distinction from Spotify’s “Tornar privada”.
    - **Fix:** Describe only the field: “pública” and “não pública”, including the public-request mismatch. Keep the required private-request message exactly as specified. The `unknown` wording already avoids asserting a result.
 
 **Should fix**
 
-2. **STATE-1 — Medium — A failed repeated recheck can leave a stale success status** ([src/App.tsx:248](../../src/App.tsx), [src/App.tsx:278](../../src/App.tsx))
+2. **STATE-1 — Medium — A failed repeated recheck can leave a stale success status** ([src/App.tsx:248:248](../../src/App.tsx), [src/App.tsx:278:278](../../src/App.tsx))
    - **Reproduction:** Let a mismatch recheck complete while Spotify still ignores the change; `rechecked` becomes true. Click recheck again and make `/me` throw. After the exception, the alert shows the error but the old status returns saying visibility was checked again.
    - **Fix:** Clear `rechecked` when a recheck starts, then set it only after that attempt returns `done`.
 
-3. **STATE-2 — Medium — A non-`done` recheck discards the original result screen** ([src/App.tsx:243](../../src/App.tsx))
+3. **STATE-2 — Medium — A non-`done` recheck discards the original result screen** ([src/App.tsx:243:243](../../src/App.tsx))
    - **Reproduction:** If a visibility recheck returns `uncertain_create` or `diverged`, the fallback assigns that outcome and removes the original title entirely. An `uncertain_create` result can then show a control suggesting playlist creation, although the action was presented as only a visibility check.
    - **Fix:** During `retryVisibility`, preserve the previous `done` outcome for every non-`done` result and expose the returned condition as an error/status on that result screen.
 
