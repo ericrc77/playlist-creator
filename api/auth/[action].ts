@@ -1,5 +1,5 @@
 // Função da Vercel para /api/auth/exchange, /api/auth/refresh e /api/auth/logout.
-import { envFromProcess, handleAuth } from '../../server/authHandler';
+import { envFromProcess, handleAuth } from '../../server/authHandler.js';
 
 export async function POST(request: Request): Promise<Response> {
   const action = new URL(request.url).pathname.split('/').pop() ?? '';

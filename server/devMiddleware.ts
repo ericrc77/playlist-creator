@@ -3,7 +3,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import type { Plugin } from 'vite';
-import { envFromProcess, handleAuth } from './authHandler';
+import { envFromProcess, handleAuth } from './authHandler.js';
 
 export function authDevPlugin(env: Record<string, string | undefined>): Plugin {
   const authEnv = envFromProcess(env);
