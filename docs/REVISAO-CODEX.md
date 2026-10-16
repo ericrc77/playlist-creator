@@ -116,3 +116,22 @@ Texto original do Codex: [revisão](codex/revisao-7.md), [verificação](codex/r
 **Decisão aceita pelo Codex:** como o botão não passa mais por `publish()`, o campo de visibilidade salvo no job não é
 atualizado por ele. Uma nova publicação do mesmo plano ainda reconfere `unknown`/`mismatch`. A opção `retryVisibility`
 de `src/lib/publish.ts` deixou de ser usada pela tela, mas foi mantida para não alterar `src/lib`.
+
+### 2026-10-16 · Erro 500 na Vercel (`ERR_MODULE_NOT_FOUND`)
+
+**Sintoma:** em https://playlist-creator-ruby.vercel.app o site carregava, mas `/api/auth/refresh` e `/api/auth/exchange`
+falhavam com 500 e `Cannot find module '/var/task/server...'`.
+
+**Causa:** `api/auth/[action].ts` importava `../../server/authHandler` sem extensão. A Vercel compila cada `.ts` para
+`.js` sem empacotar, e o Node roda o resultado como ESM (`"type": "module"`), que exige extensão explícita em imports
+relativos. O Vite e o Vitest resolvem sem extensão, por isso os testes e o `npm run dev` não pegavam o problema.
+
+**Correção:** `.js` nos imports relativos de `api/auth/[action].ts` e `server/devMiddleware.ts` (o TypeScript, com
+`moduleResolution: bundler`, e o Vite mapeiam `.js` para o `.ts`). OAuth PKCE, cookie cifrado e publicação não mudaram.
+
+**Teste de regressão:** `tests/vercelFunction.test.ts` transpila `api/` e `server/` como a Vercel, roda a função num
+processo `node` separado (sem Vite) e exige 401 em `/api/auth/refresh` sem sessão; antes da correção, falhava com o
+mesmo `ERR_MODULE_NOT_FOUND` de produção. Também confere que todo import relativo em `api/` e `server/` termina em `.js`.
+
+**Codex:** [aprovado](codex/revisao-10.md). O único achado (TEST-1, baixa: a checagem estática não via aspas duplas,
+re-exports nem `import()`) foi corrigido. **Resultado:** typecheck ok · `npm test` 141/141 · build ok.
