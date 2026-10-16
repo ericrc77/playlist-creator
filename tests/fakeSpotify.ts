@@ -8,6 +8,12 @@ export class FakeSpotify {
   calls: { method: string; path: string; body?: unknown }[] = [];
   /** Respostas forçadas, consumidas em ordem, por "MÉTODO caminho-sem-query". */
   failures = new Map<string, (Response | 'network')[]>();
+  /** Simula o Spotify criando a playlist com visibilidade diferente da pedida. */
+  createAs?: boolean;
+  /** Simula o Spotify ignorando PUT /playlists/{id} {public}. */
+  ignoreVisibilityChange = false;
+  /** Força o valor devolvido por GET /playlists/{id}. */
+  reportPublic?: boolean;
   private nextId = 1;
 
   fail(key: string, ...responses: (Response | 'network')[]) {
@@ -51,8 +57,18 @@ export class FakeSpotify {
     if (method === 'POST' && path === '/me/playlists') {
       const id = `pl${this.nextId++}`;
       const b = body as { name: string; public: boolean; description: string };
-      this.playlists.set(id, { ...b, items: [] });
+      this.playlists.set(id, { ...b, public: this.createAs ?? b.public, items: [] });
       return jsonResponse(201, { id, uri: `spotify:playlist:${id}`, name: b.name, external_urls: { spotify: `https://open.spotify.com/playlist/${id}` } });
+    }
+    m = /^\/playlists\/(\w+)$/.exec(path);
+    if (m) {
+      const pl = this.playlists.get(m[1]);
+      if (!pl) return jsonResponse(404, { error: { message: 'Not found' } });
+      if (method === 'GET') return jsonResponse(200, { public: this.reportPublic ?? pl.public });
+      if (method === 'PUT') {
+        if (!this.ignoreVisibilityChange) pl.public = (body as { public: boolean }).public;
+        return new Response(null, { status: 200 });
+      }
     }
     m = /^\/playlists\/(\w+)\/items$/.exec(path);
     if (m) {

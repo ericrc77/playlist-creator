@@ -177,3 +177,32 @@ describe('publish', () => {
     await expect(publish(client, plan(0), store)).rejects.toThrow(/Nenhuma faixa/);
   });
 });
+
+describe('privacidade depois de publicar', () => {
+  it('confirma pela API quando a visibilidade já está certa', async () => {
+    const { fake, client, store } = setup();
+    expect(await publish(client, plan(2), store)).toMatchObject({ kind: 'done', visibility: 'ok' });
+    expect(fake.count('PUT', '/playlists/pl1')).toBe(0);
+  });
+
+  it('corrige quando o Spotify cria pública uma playlist pedida fora do perfil', async () => {
+    const { fake, client, store } = setup();
+    fake.createAs = true;
+    expect(await publish(client, plan(2), store)).toMatchObject({ kind: 'done', visibility: 'corrected' });
+    expect(fake.calls.find((c) => c.method === 'PUT')?.body).toEqual({ public: false });
+    expect(fake.playlists.get('pl1')!.public).toBe(false);
+  });
+
+  it('avisa quando o Spotify ignora a correção', async () => {
+    const { fake, client, store } = setup();
+    fake.createAs = true;
+    fake.ignoreVisibilityChange = true;
+    expect(await publish(client, plan(2), store)).toMatchObject({ kind: 'done', visibility: 'mismatch' });
+  });
+
+  it('falha ao conferir não derruba a publicação', async () => {
+    const { fake, client, store } = setup();
+    fake.fail('GET /playlists/pl1', jsonResponse(403, { error: { message: 'Forbidden' } }));
+    expect(await publish(client, plan(2), store)).toMatchObject({ kind: 'done', added: 2, visibility: 'unknown' });
+  });
+});

@@ -26,8 +26,15 @@ export interface PublishJob {
   done: boolean;
 }
 
+/**
+ * Visibilidade confirmada pela API depois de publicar. No Spotify, `public: false` significa
+ * "fora do perfil e da busca"; quem tiver o link ainda abre a playlist. A API não oferece o
+ * "privada de verdade" dos apps: isso só se ajusta no próprio Spotify.
+ */
+export type Visibility = 'ok' | 'corrected' | 'mismatch' | 'unknown';
+
 export type PublishOutcome =
-  | { kind: 'done'; playlistId: string; playlistUrl: string; added: number; alreadyPublished: boolean }
+  | { kind: 'done'; playlistId: string; playlistUrl: string; added: number; alreadyPublished: boolean; visibility: Visibility }
   | { kind: 'uncertain_create'; message: string }
   | { kind: 'diverged'; playlistUrl: string; message: string };
 
@@ -115,7 +122,15 @@ async function publishLocked(
   const job: PublishJob = loadJob(store, fp, owner) ?? { fingerprint: fp, createAttempted: false, addedCount: 0, done: false };
 
   if (job.done && job.playlistId && job.playlistUrl) {
-    return { kind: 'done', playlistId: job.playlistId, playlistUrl: job.playlistUrl, added: job.addedCount, alreadyPublished: true };
+    return {
+      kind: 'done',
+      playlistId: job.playlistId,
+      playlistUrl: job.playlistUrl,
+      added: job.addedCount,
+      alreadyPublished: true,
+      // Não mexe de novo: o usuário pode ter mudado a visibilidade no Spotify depois.
+      visibility: 'unknown',
+    };
   }
 
   if (!job.playlistId) {
@@ -177,7 +192,26 @@ async function publishLocked(
   }
   job.done = true;
   saveJob(store, owner, job);
-  return { kind: 'done', playlistId, playlistUrl: job.playlistUrl!, added: final.length, alreadyPublished: false };
+  const visibility = await ensureVisibility(client, playlistId, plan.public);
+  return { kind: 'done', playlistId, playlistUrl: job.playlistUrl!, added: final.length, alreadyPublished: false, visibility };
+}
+
+/**
+ * Confere a visibilidade pedida e corrige se o Spotify tiver criado diferente (já houve bug
+ * conhecido em que `public: false` era ignorado na criação). Nunca derruba a publicação: as
+ * faixas já estão lá; o resultado só informa o que foi confirmado.
+ */
+export async function ensureVisibility(client: SpotifyClient, playlistId: string, wantPublic: boolean): Promise<Visibility> {
+  try {
+    const actual = await client.getPlaylistPublic(playlistId);
+    if (actual === wantPublic) return 'ok';
+    await client.setPlaylistPublic(playlistId, wantPublic);
+    const after = await client.getPlaylistPublic(playlistId);
+    if (after === wantPublic) return 'corrected';
+    return after === null ? 'unknown' : 'mismatch';
+  } catch {
+    return 'unknown';
+  }
 }
 
 function isPrefix(actual: string[], expected: string[]): boolean {

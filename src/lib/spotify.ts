@@ -151,6 +151,17 @@ export class SpotifyClient {
     );
   }
 
+  /** Valor atual de `public` (true = aparece no perfil). */
+  async getPlaylistPublic(playlistId: string): Promise<boolean | null> {
+    const res = await this.request<{ public?: boolean | null }>('GET', `/playlists/${encodeURIComponent(playlistId)}?fields=public`);
+    return typeof res?.public === 'boolean' ? res.public : null;
+  }
+
+  /** PUT /playlists/{id} (Change Playlist Details). Idempotente: pode repetir com segurança. */
+  setPlaylistPublic(playlistId: string, isPublic: boolean): Promise<void> {
+    return this.request('PUT', `/playlists/${encodeURIComponent(playlistId)}`, { public: isPublic });
+  }
+
   /** Lista os URIs atuais da playlist (só funciona para playlists do próprio usuário). */
   async getPlaylistItemUris(playlistId: string): Promise<string[]> {
     const uris: string[] = [];
