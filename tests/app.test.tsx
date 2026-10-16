@@ -84,7 +84,7 @@ describe('App', () => {
     expect(screen.getByTestId('track-1')).toHaveTextContent('Precisa de confirmação');
     expect(screen.getByTestId('track-2')).toHaveTextContent('Não encontrada');
     expect(fake.count('POST', '/me/playlists')).toBe(0);
-    expect(screen.getByRole('switch')).toBeChecked(); // padrão: fora do perfil
+    expect(screen.getByRole('radio', { name: 'Playlist não pública' })).toBeChecked(); // padrão
 
     await user.click(within(screen.getByTestId('track-1')).getAllByRole('radio')[0]);
     await user.click(within(screen.getByTestId('track-2')).getByLabelText(/Pular esta faixa/));
@@ -100,13 +100,13 @@ describe('App', () => {
     expect(screen.getByText(/1 faixa\(s\) puladas/)).toBeInTheDocument();
   });
 
-  it('avisa quando o JSON pede playlist pública e respeita a escolha', async () => {
+  it('JSON pede pública: avisa, mas começa como não pública (revisão Codex VIS-2)', async () => {
     const { fake, user } = setup();
     fake.catalog = [track('Paypal', ['Teto'])];
     await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X', public: true }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
     await screen.findByText(/JSON pede playlist pública/);
-    expect(screen.getByRole('switch')).not.toBeChecked();
-    await user.click(screen.getByRole('switch'));
+    expect(screen.getByRole('radio', { name: 'Playlist não pública' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Playlist pública' })).not.toBeChecked();
     await waitFor(() => expect(publishButton()).toHaveTextContent('Publicar 1 faixa'));
     await user.click(publishButton());
     await screen.findByText('Playlist publicada');
@@ -289,6 +289,7 @@ describe('App', () => {
     fake.createAs = false;
     fake.ignoreVisibilityChange = true;
     await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X', public: true }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await user.click(await screen.findByRole('radio', { name: 'Playlist pública' }));
     await waitFor(() => expect(publishButton()).toBeEnabled());
     await user.click(publishButton());
     const result = await screen.findByRole('region', { name: 'Resultado' });
@@ -369,6 +370,46 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'Nova playlist' }));
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(screen.getByLabelText('JSON da playlist')).toBeEnabled();
+  });
+
+  it('opção de visibilidade: pedido ao Spotify, sem promessa de perfil ou privacidade (revisão Codex VIS-2)', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    const group = await screen.findByRole('group', { name: 'Visibilidade solicitada ao Spotify' });
+    expect(within(group).getAllByRole('radio').map((r) => r.closest('label')!.textContent!.trim())).toEqual(['Playlist não pública', 'Playlist pública']);
+    expect(within(group).getByRole('radio', { name: 'Playlist não pública' })).toBeChecked();
+    expect(group).toHaveAccessibleDescription(
+      'O Spotify pode ignorar essa configuração. Para restringir o acesso pelo link, use Tornar privada no aplicativo do Spotify.',
+    );
+    const card = screen.getByRole('region', { name: 'Playlist' });
+    expect(card).not.toHaveTextContent(/perfil|garant/i);
+  });
+
+  it('escolher Playlist pública pede public: true e a conferência real continua depois de publicar', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await user.click(await screen.findByRole('radio', { name: 'Playlist pública' }));
+    await waitFor(() => expect(publishButton()).toBeEnabled());
+    await user.click(publishButton());
+    const result = await screen.findByRole('region', { name: 'Resultado' });
+    expect(fake.calls.find((c) => c.method === 'POST' && c.path === '/me/playlists')?.body).toMatchObject({ public: true });
+    expect(fake.count('GET', '/playlists/pl1?')).toBeGreaterThan(0); // conferência de visibilidade
+    expect(result).toHaveTextContent('playlist pública');
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+  });
+
+  it('depois da tentativa, a opção de visibilidade fica travada', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    fake.fail('POST /playlists/pl1/items', 'network');
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await waitFor(() => expect(publishButton()).toBeEnabled());
+    await user.click(publishButton());
+    await screen.findByText(/continua de onde parou/);
+    expect(screen.getByRole('radio', { name: 'Playlist pública' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'Playlist não pública' })).toBeDisabled();
   });
 
   it('Sair chama o logout', async () => {

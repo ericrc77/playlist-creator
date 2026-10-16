@@ -103,12 +103,13 @@ export function App({ config, session, local, client, token, onLogout, navigate 
     setErrors([]);
     const repeated = findRepeatedRequests(res.value.tracks);
     setWarnings([
-      ...(res.value.public ? ['O JSON pede playlist pública. Confira a opção de privacidade abaixo.'] : []),
+      ...(res.value.public ? ['O JSON pede playlist pública. O app começa com "Playlist não pública"; escolha "Playlist pública" abaixo se quiser.'] : []),
       ...res.warnings,
       ...repeated.map((g) => `As posições ${g.join(', ')} repetem a mesma faixa. A repetição será mantida, a menos que você pule uma delas.`),
     ]);
     setRequest(res.value);
-    setMeta({ name: res.value.name, description: res.value.description, public: res.value.public });
+    // Padrão é sempre "Playlist não pública", mesmo que o JSON peça pública: tornar pública é escolha explícita.
+    setMeta({ name: res.value.name, description: res.value.description, public: false });
     setOrder(res.value.tracks.map((t) => t.index));
     setOutcome(null);
     setPublishError(null);
@@ -382,23 +383,22 @@ export function App({ config, session, local, client, token, onLogout, navigate 
               Nome
               <input disabled={attempted} value={meta.name} onChange={(e) => setMeta({ ...meta, name: e.target.value })} />
             </label>
-            <label className="switch">
-              <input
-                type="checkbox"
-                role="switch"
-                disabled={attempted}
-                checked={!meta.public}
-                onChange={(e) => setMeta({ ...meta, public: !e.target.checked })}
-              />
-              <span>
-                <strong>{meta.public ? 'Aparece no seu perfil' : 'Fora do seu perfil'}</strong>
-                <small>
-                  {meta.public
-                    ? 'Qualquer pessoa pode encontrar a playlist no seu perfil.'
-                    : 'Não aparece no perfil nem na busca. Quem tiver o link ainda consegue abrir.'}
-                </small>
-              </span>
-            </label>
+            {/* É um pedido ao Spotify (campo `public` da API), não uma garantia de privacidade. */}
+            <fieldset className="visibility" disabled={attempted} aria-describedby="visibility-help">
+              <legend>Visibilidade solicitada ao Spotify</legend>
+              <label>
+                <input type="radio" name="visibility" checked={!meta.public} onChange={() => setMeta({ ...meta, public: false })} />
+                Playlist não pública
+              </label>
+              <label>
+                <input type="radio" name="visibility" checked={meta.public} onChange={() => setMeta({ ...meta, public: true })} />
+                Playlist pública
+              </label>
+              <small id="visibility-help">
+                O Spotify pode ignorar essa configuração. Para restringir o acesso pelo link, use Tornar privada no aplicativo do
+                Spotify.
+              </small>
+            </fieldset>
             <p className="summary">
               <span className="ok">{decided.filter((r) => r.choice?.kind === 'track').length} prontas</span>
               {pending.length > 0 && <span className="warn">{pending.length} para conferir</span>}

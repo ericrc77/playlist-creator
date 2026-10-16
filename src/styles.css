@@ -109,3 +109,9 @@ footer.action-bar button { width: 100%; max-width: 688px; min-height: 52px; font
 
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 a { color: var(--accent); }
+
+.visibility { border: 0; padding: 8px 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.visibility legend { font-weight: 600; padding: 0; margin-bottom: 4px; }
+.visibility label { display: flex; gap: 10px; align-items: center; cursor: pointer; }
+.visibility input { accent-color: var(--accent); width: 18px; height: 18px; margin: 0; }
+.visibility small { color: var(--muted); }

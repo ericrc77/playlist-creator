@@ -57,16 +57,19 @@ Abra **http://127.0.0.1:5173** (não `localhost`). O `npm run dev` já inclui as
    busca as faixas.
 3. Faixas encontradas com segurança não pedem nada. As que têm dúvida aparecem em **Confira antes de publicar**:
    escolha a versão certa (use "ouvir"), faça uma busca manual ou marque **Pular esta faixa**.
-4. Confira o nome e a opção **Fora do seu perfil** (ligada por padrão) e toque em **Publicar N faixas**.
-5. O app confirma as faixas e a privacidade pela API e mostra **Abrir no Spotify**.
+4. Confira o nome e a visibilidade solicitada (**Playlist não pública** é o padrão, mesmo que o JSON peça pública) e
+   toque em **Publicar N faixas**.
+5. O app confirma as faixas pela API, confere a visibilidade que o Spotify de fato aplicou e mostra **Abrir no Spotify**.
 
 Se algo falhar no meio, toque em **Publicar** de novo: o app continua de onde parou, sem duplicar playlist nem faixas.
 
 ### Privacidade: o que a API permite
 
-"Fora do seu perfil" envia `public: false` ao Spotify. Isso tira a playlist do perfil e da busca, mas **quem tiver o
-link ainda consegue abrir**: a opção "Tornar privada" do app do Spotify não existe na API. Depois de publicar, o app
-confere a visibilidade e corrige se o Spotify tiver criado diferente. Para bloquear também quem tem o link, use
+"Playlist não pública" e "Playlist pública" são **pedidos** ao Spotify (campo `public` da API), não garantias de
+privacidade. O Spotify pode ignorar essa configuração: no primeiro teste real (2026-10-16) ele manteve pública uma
+playlist pedida não pública e ignorou também a correção. Por isso, depois de publicar, o app confere o valor que o
+Spotify aplicou, tenta corrigir e avisa quando não consegue. **Quem tiver o link ainda consegue abrir** uma playlist
+não pública: a opção "Tornar privada" do app do Spotify não existe na API. Para restringir o acesso pelo link, use
 "Tornar privada" no menu da playlist, no app do Spotify.
 
 ### Problemas comuns
