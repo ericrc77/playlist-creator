@@ -101,9 +101,9 @@ título virava "Essa playlist já estava publicada". Pedido do usuário: corrigi
 publicação, com a frase "O Spotify manteve a playlist pública, apesar da solicitação de privacidade." e sem afirmar que
 a playlist aparece no perfil.
 
-Texto original do Codex: [revisão](codex/revisao-7.md) e [verificação](codex/revisao-8.md).
+Texto original do Codex: [revisão](codex/revisao-7.md), [verificação](codex/revisao-8.md) e [verificação final](codex/revisao-9.md).
 
-**Resultado:** typecheck ok · `npm test` 136/136 · build ok. `src/lib` não foi alterado.
+**Resultado:** typecheck ok · `npm test` 139/139 · build ok. `src/lib` não foi alterado.
 
 | ID | Sev. | Achado do Codex | Veredito | Correção |
 |----|------|-----------------|----------|----------|
@@ -111,7 +111,7 @@ Texto original do Codex: [revisão](codex/revisao-7.md) e [verificação](codex/
 | STATE-1 | média | Uma segunda conferência que falhasse deixava o aviso de sucesso anterior. | Procede | O aviso é limpo a cada conferência e só aparece quando o Spotify respondeu. |
 | STATE-2 | média | A reconferência passava por `publish()`; se o job salvo tivesse sumido, ela podia criar outra playlist. | Procede | O botão chama só `ensureVisibility` (ler e corrigir `public`): não cria playlist nem adiciona faixas. |
 | STATE-3 | média | (verificação) Tocar em "Nova playlist" durante uma conferência deixava o estado dela vazar para a próxima. | Procede | "Nova playlist" fica desabilitada durante a conferência, e respostas de uma playlist anterior são ignoradas. |
-| VIS-2 | média | (verificação) A opção do formulário ainda diz "Aparece no seu perfil" / "Qualquer pessoa pode encontrar a playlist no seu perfil". | Pendente | Fora do escopo pedido (os dois textos do resultado); aguarda decisão do usuário. |
+| VIS-2 | média | (verificação) A opção do formulário ainda diz "Aparece no seu perfil" / "Qualquer pessoa pode encontrar a playlist no seu perfil". | Procede | A pedido do usuário: grupo "Visibilidade solicitada ao Spotify" com "Playlist não pública" (padrão, mesmo se o JSON pedir pública) e "Playlist pública", e a explicação "O Spotify pode ignorar essa configuração. Para restringir o acesso pelo link, use Tornar privada no aplicativo do Spotify." Verificação final do Codex: [aprovado](codex/revisao-9.md), sem achados. |
 
 **Decisão aceita pelo Codex:** como o botão não passa mais por `publish()`, o campo de visibilidade salvo no job não é
 atualizado por ele. Uma nova publicação do mesmo plano ainda reconfere `unknown`/`mismatch`. A opção `retryVisibility`
