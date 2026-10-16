@@ -135,8 +135,13 @@ export async function refreshAccess(fetchFn: typeof fetch = fetch): Promise<Acce
   return readAccess(await postAuth(fetchFn, 'refresh'));
 }
 
+/** Pede ao servidor para apagar o cookie. Lança AuthError se a saída não for confirmada. */
 export async function logout(fetchFn: typeof fetch = fetch): Promise<void> {
-  await postAuth(fetchFn, 'logout').catch(() => undefined);
+  const fail = 'Não foi possível confirmar a saída com o servidor: você continua conectado neste aparelho. Tente de novo.';
+  const res = await postAuth(fetchFn, 'logout').catch(() => {
+    throw new AuthError(fail);
+  });
+  if (!res.ok) throw new AuthError(fail);
 }
 
 export function missingScopes(token: AccessToken): string[] {

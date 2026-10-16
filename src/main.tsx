@@ -55,7 +55,10 @@ function Root() {
         local={window.localStorage}
         client={client}
         token={token}
-        onLogout={() => auth.logout()}
+        onLogout={() => {
+          setError(null);
+          auth.logout().catch((e: Error) => setError(e.message));
+        }}
       />
     </>
   );

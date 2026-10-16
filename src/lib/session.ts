@@ -9,14 +9,27 @@ export function readConfig(origin: string): AuthConfig {
   return { clientId, redirectUri: `${origin}/callback` };
 }
 
+/** Executa `fn` com exclusão mútua entre as abas do mesmo app. */
+export type AuthLock = <T>(fn: () => Promise<T>) => Promise<T>;
+
+// Renovação e saída passam por uma trava compartilhada entre abas (Web Locks). Sem ela, duas abas
+// renovando ao mesmo tempo mandam o mesmo refresh token; se o Spotify o rotacionar, a segunda
+// recebe invalid_grant e o servidor apaga o cookie que a primeira acabou de gravar. Com a trava, a
+// segunda aba só faz a requisição depois, já com o cookie novo.
+const browserLock: AuthLock = (fn) =>
+  typeof navigator !== 'undefined' && navigator.locks ? navigator.locks.request('mum.auth', fn) : fn();
+
 export class AuthSession {
   private token: AccessToken | null = null;
   private refreshing: Promise<AccessToken> | null = null;
+  /** Muda a cada logout: uma renovação iniciada antes não reconecta a sessão depois. */
+  private generation = 0;
 
   constructor(
     private onChange: (connected: boolean) => void,
     private fetchFn: typeof fetch = (...a) => fetch(...a),
     private now: () => number = Date.now,
+    private lock: AuthLock = browserLock,
   ) {}
 
   get current(): AccessToken | null {
@@ -30,11 +43,13 @@ export class AuthSession {
 
   /** Renovação com uma única requisição em voo (várias chamadas simultâneas esperam a mesma). */
   refresh(): Promise<AccessToken> {
-    this.refreshing ??= refreshAccess(this.fetchFn)
-      .then((t) => {
-        this.set(t);
-        return t;
-      })
+    const generation = this.generation;
+    this.refreshing ??= this.lock(async () => {
+      const t = await refreshAccess(this.fetchFn);
+      if (generation !== this.generation) throw new AuthError('Você saiu do Spotify neste aparelho.', true);
+      this.set(t);
+      return t;
+    })
       .catch((e) => {
         if (e instanceof AuthError && e.loggedOut) {
           this.token = null;
@@ -61,9 +76,15 @@ export class AuthSession {
     return (await this.refresh()).accessToken;
   }
 
+  /**
+   * Sai só depois de o servidor confirmar que apagou o cookie. Se não confirmar (sem internet,
+   * erro do servidor), lança AuthError e a sessão continua: dizer "saiu" e voltar conectado ao
+   * recarregar seria pior.
+   */
   async logout() {
+    await this.lock(() => logout(this.fetchFn));
+    this.generation++;
     this.token = null;
-    await logout(this.fetchFn);
     this.onChange(false);
   }
 

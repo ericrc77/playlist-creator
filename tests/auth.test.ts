@@ -125,4 +125,76 @@ describe('AuthSession', () => {
     expect((fetchFn.mock.calls[0] as unknown as [string])[0]).toBe('/api/auth/logout');
     expect(onChange).toHaveBeenLastCalledWith(false);
   });
+
+  it.each([
+    ['sem internet', async () => Promise.reject(new TypeError('Failed to fetch'))],
+    ['erro do servidor', async () => jsonResponse(500, { message: 'x' })],
+  ])('logout não confirmado (%s): avisa e continua conectado', async (_n, logoutResponse) => {
+    const fetchFn = vi.fn(async (url: string) =>
+      url.endsWith('/logout') ? logoutResponse() : jsonResponse(200, { accessToken: 'AT', expiresAt: 10_000_000, scope: '' }),
+    );
+    const onChange = vi.fn();
+    const s = new AuthSession(onChange, fetchFn as unknown as typeof fetch, () => 0);
+    await s.restore();
+    await expect(s.logout()).rejects.toThrow(/continua conectado/);
+    expect(s.current?.accessToken).toBe('AT');
+    expect(onChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it('renovação que termina depois do logout não reconecta', async () => {
+    let finish!: (r: Response) => void;
+    const fetchFn = vi.fn((url: string) =>
+      url.endsWith('/logout') ? Promise.resolve(jsonResponse(200, { ok: true })) : new Promise<Response>((r) => (finish = r)),
+    );
+    const onChange = vi.fn();
+    // sem Web Locks (navegador antigo): a trava não serializa nada
+    const s = new AuthSession(onChange, fetchFn as unknown as typeof fetch, () => 0, (fn) => fn());
+    const pending = s.refresh();
+    await s.logout();
+    finish(jsonResponse(200, { accessToken: 'TARDIO', expiresAt: 10_000_000, scope: '' }));
+    await expect(pending).rejects.toThrow();
+    expect(s.current).toBeNull();
+    expect(onChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
+describe('duas abas renovando ao mesmo tempo', () => {
+  // Servidor falso com um "cookie" compartilhado pelas abas, como no navegador. Cada renovação
+  // rotaciona o refresh token e invalida o anterior; um token velho recebe invalid_grant e o
+  // servidor apaga o cookie (comportamento real do /api/auth/refresh).
+  function fakeServer() {
+    const jar = { cookie: 'RT1' as string | null };
+    let valid = 'RT1';
+    let n = 1;
+    const fetchFn = vi.fn(async () => {
+      const sent = jar.cookie; // o navegador anexa o cookie no momento da requisição
+      await new Promise((r) => setTimeout(r, 5));
+      if (!sent || sent !== valid) {
+        jar.cookie = null;
+        return jsonResponse(401, { error: 'no_session', message: 'Sessão expirada.' });
+      }
+      valid = `RT${++n}`;
+      jar.cookie = valid;
+      return jsonResponse(200, { accessToken: `AT${n}`, expiresAt: 10_000_000, scope: '' });
+    });
+    return { jar, fetchFn: fetchFn as unknown as typeof fetch };
+  }
+
+  function sharedLock() {
+    let tail: Promise<unknown> = Promise.resolve();
+    return <T,>(fn: () => Promise<T>): Promise<T> => {
+      const run = tail.then(fn, fn);
+      tail = run.catch(() => undefined);
+      return run;
+    };
+  }
+
+  it('com a trava entre abas, as duas continuam conectadas e o cookie novo sobrevive', async () => {
+    const server = fakeServer();
+    const lock = sharedLock();
+    const a = new AuthSession(() => {}, server.fetchFn, () => 0, lock);
+    const b = new AuthSession(() => {}, server.fetchFn, () => 0, lock);
+    expect(await Promise.all([a.restore(), b.restore()])).toEqual([true, true]);
+    expect(server.jar.cookie).toBe('RT3');
+  });
 });
