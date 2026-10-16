@@ -24,6 +24,8 @@ export interface PublishJob {
   playlistUrl?: string;
   addedCount: number;
   done: boolean;
+  /** Resultado da conferência de visibilidade; 'unknown' e 'mismatch' são refeitos ao publicar de novo. */
+  visibility?: Visibility;
 }
 
 /**
@@ -122,14 +124,21 @@ async function publishLocked(
   const job: PublishJob = loadJob(store, fp, owner) ?? { fingerprint: fp, createAttempted: false, addedCount: 0, done: false };
 
   if (job.done && job.playlistId && job.playlistUrl) {
+    let visibility: Visibility = job.visibility ?? 'unknown';
+    // Só tenta de novo o que não foi confirmado. Visibilidade já confirmada não é tocada (o usuário
+    // pode tê-la mudado no Spotify depois), nem a de jobs antigos, que não registravam o campo.
+    if (job.visibility === 'unknown' || job.visibility === 'mismatch') {
+      visibility = await ensureVisibility(client, job.playlistId, plan.public);
+      job.visibility = visibility;
+      saveJob(store, owner, job);
+    }
     return {
       kind: 'done',
       playlistId: job.playlistId,
       playlistUrl: job.playlistUrl,
       added: job.addedCount,
       alreadyPublished: true,
-      // Não mexe de novo: o usuário pode ter mudado a visibilidade no Spotify depois.
-      visibility: 'unknown',
+      visibility,
     };
   }
 
@@ -191,8 +200,12 @@ async function publishLocked(
     };
   }
   job.done = true;
+  // Gravado junto com `done`: se a aba fechar antes da conferência, a próxima tentativa refaz.
+  job.visibility = 'unknown';
   saveJob(store, owner, job);
   const visibility = await ensureVisibility(client, playlistId, plan.public);
+  job.visibility = visibility;
+  saveJob(store, owner, job);
   return { kind: 'done', playlistId, playlistUrl: job.playlistUrl!, added: final.length, alreadyPublished: false, visibility };
 }
 

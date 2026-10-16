@@ -14,6 +14,8 @@ export class FakeSpotify {
   ignoreVisibilityChange = false;
   /** Força o valor devolvido por GET /playlists/{id}. */
   reportPublic?: boolean;
+  /** Permite segurar uma resposta (ex.: busca lenta) até o teste liberar. */
+  hold?: (key: string, url: URL) => Promise<void> | undefined;
   private nextId = 1;
 
   fail(key: string, ...responses: (Response | 'network')[]) {
@@ -32,6 +34,7 @@ export class FakeSpotify {
     this.calls.push({ method, path: path + url.search, body });
 
     const key = `${method} ${path}`;
+    await this.hold?.(key, url);
     const queue = this.failures.get(key);
     if (queue?.length) {
       const f = queue.shift()!;

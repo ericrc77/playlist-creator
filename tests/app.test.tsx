@@ -151,6 +151,58 @@ describe('App', () => {
     expect(fake.playlists.get('pl1')!.items).toHaveLength(1);
   });
 
+  it('busca manual que chega depois de publicar não muda o plano nem cria outra playlist (revisão Codex APP-1)', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'], { explicit: true }), track('Paypal', ['Teto'], { explicit: false })];
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await waitFor(() => expect(screen.getByTestId('track-0')).toHaveTextContent('Precisa de confirmação'));
+
+    // Busca manual lenta: fica presa até o teste liberar.
+    let release!: () => void;
+    fake.hold = (key, url) =>
+      key === 'GET /search' && url.searchParams.get('q') === 'lenta' ? new Promise<void>((r) => (release = r)) : undefined;
+    const box = screen.getByLabelText('Busca manual');
+    await user.clear(box);
+    await user.type(box, 'lenta');
+    await user.click(screen.getByRole('button', { name: 'Buscar' }));
+
+    // Antes de a busca voltar, escolhe uma das candidatas já mostradas e publica; a adição falha.
+    await user.click(within(screen.getByTestId('track-0')).getAllByRole('radio')[0]);
+    fake.fail('POST /playlists/pl1/items', 'network');
+    await user.click(publishButton());
+    await screen.findByText(/continua de onde parou/);
+
+    // A busca atrasada chega: não pode desfazer a escolha nem reabrir a conferência.
+    release();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId('track-0')).not.toBeInTheDocument();
+    expect(publishButton()).toHaveTextContent('Publicar 1 faixa');
+
+    await user.click(publishButton());
+    await screen.findByText('Playlist publicada');
+    expect(fake.count('POST', '/me/playlists')).toBe(1);
+    expect(fake.playlists.size).toBe(1);
+  });
+
+  it('visibilidade não confirmada não é apresentada como fato e pode ser conferida de novo (revisão Codex PUB-1)', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    fake.createAs = true; // Spotify criou no perfil, embora o pedido fosse fora do perfil
+    fake.fail('GET /playlists/pl1', new Response(JSON.stringify({ error: { message: 'Forbidden' } }), { status: 403 }));
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await waitFor(() => expect(publishButton()).toBeEnabled());
+    await user.click(publishButton());
+    await screen.findByText('Playlist publicada');
+    expect(screen.getByText(/visibilidade não confirmada/)).toBeInTheDocument();
+    expect(screen.queryByText(/fora do seu perfil/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Conferir visibilidade de novo' }));
+    await screen.findByText(/o app corrigiu/);
+    expect(screen.getByText(/fora do seu perfil/)).toBeInTheDocument();
+    expect(fake.playlists.get('pl1')!.public).toBe(false);
+    expect(fake.count('POST', '/me/playlists')).toBe(1);
+  });
+
   it('Sair chama o logout', async () => {
     const { onLogout, user } = setup();
     await user.click(screen.getByRole('button', { name: 'Sair' }));

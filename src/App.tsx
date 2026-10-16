@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { beginLogin, missingScopes, type AccessToken, type AuthConfig, type KVStore } from './lib/auth';
 import { findRepeatedRequests, parsePlaylistText, type PlaylistRequest, type TrackRequest } from './lib/contract';
 import type { MatchResult, SpotifyTrack } from './lib/matching';
-import { publish, type PublishOutcome } from './lib/publish';
+import { publish, type PublishOutcome, type PublishPlan } from './lib/publish';
 import { resolveTrack } from './lib/resolver';
 import type { SpotifyClient } from './lib/spotify';
 
@@ -47,6 +47,12 @@ export function App({ config, session, local, client, token, onLogout, navigate 
   // Depois de uma tentativa de publicação, o plano fica travado: mudar nome, ordem ou faixas
   // geraria outro job e poderia criar uma segunda playlist.
   const [attempted, setAttempted] = useState(false);
+  // O plano enviado na primeira tentativa é reutilizado em todas as seguintes, mesmo que algo na
+  // tela mude depois (ex.: resposta atrasada de uma busca manual). Mesmo plano → mesmo job.
+  const frozenPlan = useRef<PublishPlan | null>(null);
+  // Busca manual em voo por faixa: uma resposta só vale se for a última pedida e se nada foi
+  // escolhido ou publicado desde então.
+  const searchSeq = useRef(new Map<number, number>());
   const loadedText = useRef<string | null>(null);
   const run = useRef(0);
 
@@ -99,7 +105,7 @@ export function App({ config, session, local, client, token, onLogout, navigate 
     setOrder(res.value.tracks.map((t) => t.index));
     setOutcome(null);
     setPublishError(null);
-    setAttempted(false);
+    unlock();
     setProgress(null);
     const initial: Row[] = res.value.tracks.map((req) => ({ req }));
     setRows(initial);
@@ -131,13 +137,33 @@ export function App({ config, session, local, client, token, onLogout, navigate 
     }
   }
 
+  function unlock() {
+    frozenPlan.current = null;
+    searchSeq.current.clear();
+    setAttempted(false);
+  }
+
+  /** Invalida a busca manual em voo da faixa e devolve o número da próxima. */
+  function nextSearch(index: number) {
+    const seq = (searchSeq.current.get(index) ?? 0) + 1;
+    searchSeq.current.set(index, seq);
+    return seq;
+  }
+
   function choose(index: number, choice: Choice | undefined) {
+    if (frozenPlan.current) return;
+    nextSearch(index); // a escolha explícita vale mais que uma busca que ainda vai chegar
     setRows((prev) => prev.map((r) => (r.req.index === index ? { ...r, choice } : r)));
   }
 
   async function manualSearch(index: number, query: string) {
+    if (frozenPlan.current) return;
+    const seq = nextSearch(index);
+    setRows((prev) => prev.map((r) => (r.req.index === index ? { ...r, choice: undefined } : r)));
+    const current = () => !frozenPlan.current && searchSeq.current.get(index) === seq;
     try {
       const found = await client.searchTracks(query);
+      if (!current()) return;
       setRows((prev) =>
         prev.map((r) =>
           r.req.index === index
@@ -155,6 +181,7 @@ export function App({ config, session, local, client, token, onLogout, navigate 
         ),
       );
     } catch (e) {
+      if (!current()) return;
       setRows((prev) => prev.map((r) => (r.req.index === index ? { ...r, error: (e as Error).message } : r)));
     }
   }
@@ -168,7 +195,7 @@ export function App({ config, session, local, client, token, onLogout, navigate 
     setRows([]);
     setOutcome(null);
     setPublishError(null);
-    setAttempted(false);
+    unlock();
     setProgress(null);
     setWarnings([]);
   }
@@ -193,16 +220,18 @@ export function App({ config, session, local, client, token, onLogout, navigate 
   }
 
   async function doPublish(confirmRecreate = false) {
+    frozenPlan.current ??= {
+      name: meta.name.trim(),
+      description: meta.description.trim(),
+      public: meta.public,
+      uris: finalTracks.map((t) => t.uri),
+    };
+    const plan = frozenPlan.current;
     setPublishing(true);
     setAttempted(true);
     setPublishError(null);
     try {
-      const result = await publish(
-        client,
-        { name: meta.name.trim(), description: meta.description.trim(), public: meta.public, uris: finalTracks.map((t) => t.uri) },
-        local,
-        { confirmRecreate, onProgress: (added, total) => setProgress({ added, total }) },
-      );
+      const result = await publish(client, plan, local, { confirmRecreate, onProgress: (added, total) => setProgress({ added, total }) });
       setOutcome(result);
       if (result.kind === 'done') session.removeItem(DRAFT_KEY);
     } catch (e) {
@@ -231,9 +260,14 @@ export function App({ config, session, local, client, token, onLogout, navigate 
         <section className="card result" aria-label="Resultado">
           <h2>{outcome.alreadyPublished ? 'Essa playlist já estava publicada' : 'Playlist publicada'}</h2>
           <p className="big">
-            <strong>{outcome.added}</strong> faixa(s) confirmadas pelo Spotify · {meta.public ? 'no seu perfil' : 'fora do seu perfil'}
+            <strong>{outcome.added}</strong> faixa(s) confirmadas pelo Spotify ·{' '}
+            {outcome.visibility === 'ok' || outcome.visibility === 'corrected'
+              ? meta.public
+                ? 'no seu perfil'
+                : 'fora do seu perfil'
+              : 'visibilidade não confirmada'}
           </p>
-          <VisibilityNote outcome={outcome} wantPublic={meta.public} />
+          <VisibilityNote outcome={outcome} wantPublic={meta.public} onRetry={() => doPublish()} busy={publishing} />
           <a className="button" href={outcome.playlistUrl} target="_blank" rel="noreferrer">
             Abrir no Spotify
           </a>
@@ -336,7 +370,13 @@ export function App({ config, session, local, client, token, onLogout, navigate 
               <h2>Confira antes de publicar</h2>
               <ol className="tracks">
                 {pending.map((row) => (
-                  <TrackReview key={row.req.index} row={row} onChoose={(c) => choose(row.req.index, c)} onSearch={(q) => manualSearch(row.req.index, q)} />
+                  <TrackReview
+                    key={row.req.index}
+                    row={row}
+                    disabled={attempted}
+                    onChoose={(c) => choose(row.req.index, c)}
+                    onSearch={(q) => manualSearch(row.req.index, q)}
+                  />
                 ))}
               </ol>
             </section>
@@ -424,12 +464,31 @@ function Header({ children }: { children?: React.ReactNode }) {
   );
 }
 
-function VisibilityNote({ outcome, wantPublic }: { outcome: Extract<PublishOutcome, { kind: 'done' }>; wantPublic: boolean }) {
-  if (outcome.visibility === 'mismatch') {
+function VisibilityNote({
+  outcome,
+  wantPublic,
+  onRetry,
+  busy,
+}: {
+  outcome: Extract<PublishOutcome, { kind: 'done' }>;
+  wantPublic: boolean;
+  onRetry: () => void;
+  busy: boolean;
+}) {
+  const option = `"${wantPublic ? 'no perfil' : 'fora do perfil'}"`;
+  if (outcome.visibility === 'mismatch' || outcome.visibility === 'unknown') {
     return (
-      <p className="error" role="alert">
-        O Spotify não aplicou a opção "{wantPublic ? 'no perfil' : 'fora do perfil'}". Ajuste no app do Spotify, no menu da playlist.
-      </p>
+      <div className="error" role="alert">
+        <p>
+          {outcome.visibility === 'mismatch'
+            ? `O Spotify não aplicou a opção ${option}.`
+            : `Não foi possível confirmar com o Spotify se a playlist ficou ${option}.`}{' '}
+          Confira de novo ou ajuste no app do Spotify, no menu da playlist.
+        </p>
+        <button className="secondary" onClick={onRetry} disabled={busy}>
+          Conferir visibilidade de novo
+        </button>
+      </div>
     );
   }
   return (
@@ -473,7 +532,17 @@ const STATUS_LABEL = {
   not_found: 'Não encontrada',
 } as const;
 
-function TrackReview({ row, onChoose, onSearch }: { row: Row; onChoose: (c: Choice | undefined) => void; onSearch: (q: string) => void }) {
+function TrackReview({
+  row,
+  disabled,
+  onChoose,
+  onSearch,
+}: {
+  row: Row;
+  disabled: boolean;
+  onChoose: (c: Choice | undefined) => void;
+  onSearch: (q: string) => void;
+}) {
   const [query, setQuery] = useState(() => [row.req.title, ...row.req.artists].filter(Boolean).join(' '));
   const status = row.match?.status;
   const name = `choice-${row.req.index}`;
@@ -486,7 +555,7 @@ function TrackReview({ row, onChoose, onSearch }: { row: Row; onChoose: (c: Choi
       {row.error && <p className="error">{row.error}</p>}
       {row.match?.reason && <p className="hint">{row.match.reason}</p>}
       {(row.match || row.error) && (
-        <fieldset>
+        <fieldset disabled={disabled}>
           <legend className="sr-only">Escolha para {describeRequest(row.req)}</legend>
           {row.match?.candidates.map((t) => (
             <label key={t.id} className="candidate">

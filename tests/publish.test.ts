@@ -205,4 +205,36 @@ describe('privacidade depois de publicar', () => {
     fake.fail('GET /playlists/pl1', jsonResponse(403, { error: { message: 'Forbidden' } }));
     expect(await publish(client, plan(2), store)).toMatchObject({ kind: 'done', added: 2, visibility: 'unknown' });
   });
+
+  it('visibilidade não confirmada é conferida e corrigida ao publicar de novo, sem recriar', async () => {
+    const { fake, client, store } = setup();
+    fake.createAs = true; // Spotify criou pública…
+    fake.fail('GET /playlists/pl1', jsonResponse(403, { error: { message: 'Forbidden' } })); // …e a conferência falhou
+    expect(await publish(client, plan(2), store)).toMatchObject({ kind: 'done', visibility: 'unknown' });
+    expect(fake.playlists.get('pl1')!.public).toBe(true);
+
+    expect(await publish(client, plan(2), store)).toMatchObject({ kind: 'done', alreadyPublished: true, visibility: 'corrected' });
+    expect(fake.playlists.get('pl1')!.public).toBe(false);
+    expect(fake.count('POST', '/me/playlists')).toBe(1);
+    expect(fake.playlists.size).toBe(1);
+  });
+
+  it('visibilidade recusada (mismatch) também é tentada de novo', async () => {
+    const { fake, client, store } = setup();
+    fake.createAs = true;
+    fake.ignoreVisibilityChange = true;
+    expect(await publish(client, plan(2), store)).toMatchObject({ visibility: 'mismatch' });
+    fake.ignoreVisibilityChange = false;
+    expect(await publish(client, plan(2), store)).toMatchObject({ alreadyPublished: true, visibility: 'corrected' });
+  });
+
+  it('visibilidade já confirmada não é mexida de novo', async () => {
+    const { fake, client, store } = setup();
+    expect(await publish(client, plan(2), store)).toMatchObject({ visibility: 'ok' });
+    fake.playlists.get('pl1')!.public = true; // o usuário mudou no Spotify depois
+    const calls = fake.calls.length;
+    expect(await publish(client, plan(2), store)).toMatchObject({ alreadyPublished: true, visibility: 'ok' });
+    expect(fake.calls.slice(calls).filter((c) => c.path === '/playlists/pl1' || c.path.startsWith('/playlists/pl1?'))).toHaveLength(0);
+    expect(fake.playlists.get('pl1')!.public).toBe(true);
+  });
 });
