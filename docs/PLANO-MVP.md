@@ -16,5 +16,17 @@ Estado em 2026-10-14. ✅ = implementado e coberto por testes automatizados; ⏳
 | 10 | Revisão, testes e auditoria pelo Codex | ⏳ aguardando execução local (o Codex não está disponível na nuvem) |
 | 11 | Primeira playlist real criada pelo usuário | ⏳ |
 
+## Rodada 2026-10-16 · publicação rápida
+
+| Item | Estado |
+|---|---|
+| Config para Vercel (`vercel.json`, funções `api/auth`) | ✅ (deploy aguarda confirmação do Eric) |
+| Client ID no ambiente | ✅ |
+| Login persistente com renovação (cookie HttpOnly cifrado) | ✅ |
+| Colar → conferir dúvidas → publicar numa tela | ✅ |
+| Privacidade conferida e corrigida após publicar | ✅ |
+| Interface para celular | ✅ |
+| Revisão do Codex desta rodada | ⏳ |
+
 ## Fora do MVP
 Curadoria/IA no app, sincronização automática com o ChatGPT, cópia de curtidas para o Notion, deploy obrigatório.

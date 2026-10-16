@@ -1,15 +1,16 @@
 # Meu Universo Musical — Publicador Spotify
 
-Aplicativo local que recebe o JSON de uma playlist **já aprovada em conversa no ChatGPT**, encontra as faixas no
+Aplicativo web que recebe o JSON de uma playlist **já aprovada em conversa no ChatGPT**, encontra as faixas no
 catálogo do Spotify, deixa você conferir cada correspondência e só então publica a playlist na sua conta, pela API
 oficial.
 
 O app **não faz curadoria** e não usa IA. A conversa e a escolha das músicas continuam no ChatGPT.
 
 ```
-ChatGPT (aprovação) → JSON → importar no app → conectar Spotify (OAuth PKCE) → conferir faixas
-→ prévia (nome, descrição, privacidade, ordem) → clique em Publicar → link real da playlist
+ChatGPT (aprovação) → copiar o JSON → colar no app → conferir só as faixas com dúvida → Publicar → link
 ```
+
+Funciona no celular e no computador. Depois de conectar o Spotify uma vez, o app lembra o acesso neste aparelho.
 
 ## Requisitos
 
@@ -17,52 +18,66 @@ ChatGPT (aprovação) → JSON → importar no app → conectar Spotify (OAuth P
 - Conta Spotify **Premium** (exigência do Spotify para apps em Development Mode).
 - Um app no [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
 
-## 1. Criar o app no Spotify (uma vez)
+## 1. Configurar o app no Spotify (uma vez)
 
-1. Entre no Developer Dashboard e clique em **Create app**.
-2. Nome e descrição livres. Em **Redirect URIs**, adicione exatamente:
-   `http://127.0.0.1:5173/callback` (use `127.0.0.1`; o Spotify não aceita `localhost`).
-3. Em **Which API/SDKs are you planning to use?**, marque **Web API**. Salve.
-4. Em **User Management**, confirme que o e-mail da sua conta Spotify está na lista (em Development Mode só contas
-   listadas podem usar o app).
-5. Copie o **Client ID**. **Não** copie nem use o Client Secret: este app usa PKCE e não precisa dele.
+1. No [Developer Dashboard](https://developer.spotify.com/dashboard), abra o app (ou **Create app**, marcando **Web API**).
+2. Em **Redirect URIs**, deixe cadastrados exatamente:
+   - `http://127.0.0.1:5173/callback` (uso local; o Spotify não aceita `localhost`);
+   - `https://SEU-DOMINIO.vercel.app/callback` (o domínio que a Vercel der ao projeto).
+3. Em **User Management**, confirme que o e-mail da sua conta Spotify está na lista.
+4. Copie o **Client ID**. **Não** use o Client Secret: o login é PKCE e não precisa dele.
 
-## 2. Rodar o app
+## 2. Publicar na Vercel
+
+1. Na Vercel, **Add New → Project** e importe `ericrc77/playlist-creator`. A Vercel detecta Vite; o `vercel.json`
+   já define build, rotas e cabeçalhos de segurança.
+2. Em **Settings → Environment Variables**, crie (Production e Preview):
+   - `VITE_SPOTIFY_CLIENT_ID` = o Client ID do Spotify (não é segredo);
+   - `SESSION_SECRET` = um valor aleatório de 64 caracteres, marcado como **Sensitive**. Gere com
+     `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Ele cifra o cookie de sessão; trocar
+     o valor desconecta todo mundo.
+3. Em **Settings → Git**, a branch de produção pode ser `claude/mvp-publicador-spotify-ks63le` enquanto não houver
+   merge na principal.
+4. Faça o deploy e cadastre `https://<domínio>/callback` no Spotify (passo 1.2).
+
+## 3. Rodar localmente (opcional)
 
 ```bash
-git clone https://github.com/ericrc77/playlist-creator.git
-cd playlist-creator
-git checkout claude/mvp-publicador-spotify-ks63le   # enquanto não houver merge na branch principal
 npm install
+cp .env.example .env.local   # preencha VITE_SPOTIFY_CLIENT_ID (SESSION_SECRET é opcional no dev)
 npm run dev
 ```
 
-Abra **http://127.0.0.1:5173** (não `localhost`). Na primeira vez, cole o Client ID na tela e clique em **Salvar**.
-Opcional: crie `.env.local` a partir de `.env.example` com `VITE_SPOTIFY_CLIENT_ID=...`.
+Abra **http://127.0.0.1:5173** (não `localhost`). O `npm run dev` já inclui as rotas `/api/auth/*`.
 
-## 3. Testar a criação de uma playlist real
+## 4. Publicar uma playlist
 
-1. Clique em **Conectar ao Spotify** e autorize. As permissões pedidas são só criar/editar playlists.
-2. Cole o JSON aprovado no ChatGPT (ou carregue `examples/playlist-exemplo.json`, que é só um exemplo técnico) e
-   clique em **Validar e buscar faixas**.
-3. Na conferência, cada faixa aparece como **Encontrada**, **Precisa de confirmação** ou **Não encontrada**. Escolha a
-   versão certa (use "ouvir" para conferir), faça uma busca manual ou marque **Pular esta faixa**. O botão de avançar só
-   libera quando todas as faixas tiverem uma decisão.
-4. Na prévia, revise nome, descrição, privacidade (privada por padrão) e ordem.
-5. Clique em **Publicar no Spotify**. Ao final o app mostra o link da playlist, conferido pela API, e as faixas puladas.
-6. Abra o link e confira no Spotify.
+1. Toque em **Conectar ao Spotify** e autorize (só na primeira vez em cada aparelho).
+2. Toque em **Colar da área de transferência** (ou cole no campo / escolha um arquivo `.json`). O app valida e já
+   busca as faixas.
+3. Faixas encontradas com segurança não pedem nada. As que têm dúvida aparecem em **Confira antes de publicar**:
+   escolha a versão certa (use "ouvir"), faça uma busca manual ou marque **Pular esta faixa**.
+4. Confira o nome e a opção **Fora do seu perfil** (ligada por padrão) e toque em **Publicar N faixas**.
+5. O app confirma as faixas e a privacidade pela API e mostra **Abrir no Spotify**.
 
-Se algo falhar no meio (internet, limite de requisições), clique em **Publicar** de novo: o app retoma de onde parou,
-sem criar outra playlist nem repetir faixas.
+Se algo falhar no meio, toque em **Publicar** de novo: o app continua de onde parou, sem duplicar playlist nem faixas.
+
+### Privacidade: o que a API permite
+
+"Fora do seu perfil" envia `public: false` ao Spotify. Isso tira a playlist do perfil e da busca, mas **quem tiver o
+link ainda consegue abrir**: a opção "Tornar privada" do app do Spotify não existe na API. Depois de publicar, o app
+confere a visibilidade e corrige se o Spotify tiver criado diferente. Para bloquear também quem tem o link, use
+"Tornar privada" no menu da playlist, no app do Spotify.
 
 ### Problemas comuns
 
 | Sintoma | Causa provável |
 |--------|----------------|
-| `INVALID_CLIENT: Invalid redirect URI` | O Redirect URI no Dashboard não é exatamente `http://127.0.0.1:5173/callback`. |
+| `INVALID_CLIENT: Invalid redirect URI` | O endereço `/callback` do site aberto não está cadastrado no Dashboard. |
 | Erro 403 ao buscar ou publicar | Sua conta não está em **User Management**, ou o dono do app está sem Premium. |
-| "Permissões faltando" | Desconecte e conecte de novo para aceitar os escopos. |
-| Trocar o Client ID | Limpe os dados do site `127.0.0.1:5173` no navegador. |
+| "SESSION_SECRET não está configurado" | Falta a variável na Vercel (ou tem menos de 32 caracteres). Ajuste e faça redeploy. |
+| "VITE_SPOTIFY_CLIENT_ID" na tela | Falta a variável na Vercel; ela entra no build, então faça redeploy depois de criar. |
+| Pede login de novo | Você tocou em **Sair**, removeu o acesso no Spotify ou o `SESSION_SECRET` mudou. |
 
 ## Formato do JSON (contrato 1.0)
 
@@ -88,7 +103,8 @@ npm run build      # build de produção
 ```
 
 - `src/lib/contract.ts`: validação do contrato.
-- `src/lib/auth.ts`: OAuth Authorization Code + PKCE.
+- `src/lib/auth.ts` e `session.ts`: login PKCE no navegador e token de acesso em memória.
+- `server/authHandler.ts` (rotas `api/auth/[action].ts`): troca e renovação do token, cookie de sessão cifrado.
 - `src/lib/spotify.ts`: cliente da Web API (endpoints de 2026, tratamento de 401/403/429/5xx).
 - `src/lib/matching.ts` e `resolver.ts`: busca e classificação das correspondências.
 - `src/lib/publish.ts`: publicação idempotente e retomável.
@@ -99,6 +115,10 @@ Decisões em [docs/DECISOES-TECNICAS.md](docs/DECISOES-TECNICAS.md); plano e est
 
 ## Segurança
 
-- Nenhum segredo no repositório: o Client ID não é segredo e o Client Secret não é usado.
-- Tokens ficam só no `sessionStorage` da aba e somem ao fechá-la.
+- Nenhum segredo no repositório. O Client ID não é segredo, o Client Secret não é usado e o `SESSION_SECRET` vive só
+  nas variáveis da Vercel (ou no seu `.env.local`, que o git ignora).
+- O refresh token fica num cookie `HttpOnly`, `Secure`, `SameSite=Strict`, cifrado com AES-256-GCM: scripts da página
+  não conseguem lê-lo. O access token (1 h) fica só na memória da aba.
+- As rotas `/api/auth/*` aceitam só POST da mesma origem com cabeçalho próprio, e o `redirect_uri` é fixado pelo
+  servidor. A página usa CSP restrita (`vercel.json`).
 - O JSON é recusado se contiver campos de credencial.

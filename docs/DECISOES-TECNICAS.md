@@ -32,3 +32,29 @@ acontecem no ChatGPT. O app só importa o JSON aprovado, encontra as faixas no S
    exatamente as faixas planejadas, na ordem.
 9. **Repetições do JSON são mantidas** (com aviso na conferência); o usuário pode pular uma delas.
 10. **Dados do Spotify não vão para modelos de IA.** O app não chama nenhuma IA.
+
+## 2026-10-16 · Publicação rápida, Vercel e login persistente
+
+11. **Hospedagem na Vercel** com o mesmo app Vite e funções em `api/`. Sem deploy automático em produção sem
+    aprovação do Eric.
+12. **Client ID no ambiente** (`VITE_SPOTIFY_CLIENT_ID`), embutido no build. A tela de digitar Client ID foi removida.
+13. **Login persistente com "backend for frontend" mínimo** (substitui a decisão 4). Opções avaliadas:
+    - refresh token em `localStorage`: login persistente sem servidor, mas qualquer XSS ou extensão leria um token
+      que dá acesso por meses à conta. Recusado;
+    - fluxo com client secret no servidor: desnecessário, o PKCE já basta e o secret seria mais um segredo a vazar;
+    - **escolhido:** o navegador continua fazendo PKCE (verifier e `state` no `sessionStorage`), mas a troca do code e
+      a renovação passam por `/api/auth/exchange|refresh|logout`. O refresh token fica num cookie `HttpOnly`
+      (`__Host-` + `Secure` em HTTPS), `SameSite=Strict`, cifrado com AES-256-GCM (chave derivada de
+      `SESSION_SECRET`), validade de 180 dias renovada a cada uso, e é rotacionado quando o Spotify devolve outro.
+      O access token fica só em memória. Proteção de CSRF: só POST, cabeçalho `X-MUM` obrigatório, `Origin` igual à
+      do app e `redirect_uri` derivado pelo servidor. Sem banco de dados: a sessão inteira está no cookie.
+    - No dev, um plugin do Vite monta as mesmas rotas; sem `SESSION_SECRET`, usa um segredo temporário.
+14. **Fluxo de uma tela:** colar → validação e busca automáticas → conferir só as pendências → um botão fixo
+    "Publicar N faixas". A conferência de correspondências ambíguas continua obrigatória; reordenar fica em "Ver faixas
+    e ordem".
+15. **Privacidade.** Investigação da playlist que apareceu pública: o app sempre enviou `public: false` por padrão.
+    Causas prováveis: (a) `public: false` na API só significa "fora do perfil e da busca"; a playlist continua abrindo
+    pelo link e o app do Spotify não a mostra como "privada" (essa opção não existe na API); (b) o Spotify já teve bug
+    em que `public: false` era ignorado na criação; (c) o JSON pedir `"public": true`. Medidas: o padrão continua fora
+    do perfil, o app avisa quando o JSON pede pública, confere `GET /playlists/{id}?fields=public` depois de publicar,
+    corrige com `PUT /playlists/{id}` se necessário e explica na tela de resultado como usar "Tornar privada".
