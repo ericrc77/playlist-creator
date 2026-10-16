@@ -230,11 +230,11 @@ describe('App', () => {
     await user.click(publishButton());
     await screen.findByText('Playlist publicada');
     expect(screen.getByText(/visibilidade não confirmada/)).toBeInTheDocument();
-    expect(screen.queryByText(/fora do seu perfil/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/playlist não pública/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Conferir visibilidade de novo' }));
     await screen.findByText(/o app corrigiu/);
-    expect(screen.getByText(/fora do seu perfil/)).toBeInTheDocument();
+    expect(screen.getByText(/playlist não pública/)).toBeInTheDocument();
     expect(fake.playlists.get('pl1')!.public).toBe(false);
     expect(fake.count('POST', '/me/playlists')).toBe(1);
   });
@@ -277,7 +277,7 @@ describe('App', () => {
     fake.ignoreVisibilityChange = false;
     await user.click(screen.getByRole('button', { name: 'Conferir visibilidade de novo' }));
     const result = screen.getByRole('region', { name: 'Resultado' });
-    await waitFor(() => expect(result).toHaveTextContent('fora do seu perfil'));
+    await waitFor(() => expect(result).toHaveTextContent('playlist não pública'));
     expect(within(result).getByRole('heading')).toHaveTextContent('Playlist publicada');
     expect(screen.getByRole('status')).toHaveTextContent('Nenhuma faixa foi adicionada');
     expect(fake.playlists.get('pl1')!.public).toBe(false);
@@ -292,8 +292,58 @@ describe('App', () => {
     await waitFor(() => expect(publishButton()).toBeEnabled());
     await user.click(publishButton());
     const result = await screen.findByRole('region', { name: 'Resultado' });
-    expect(result).toHaveTextContent('O Spotify manteve a playlist privada, apesar da solicitação para torná-la pública.');
-    expect(result).toHaveTextContent('o Spotify manteve privada');
+    expect(result).toHaveTextContent('O Spotify manteve a playlist não pública, apesar da solicitação para torná-la pública.');
+    expect(result).toHaveTextContent('o Spotify manteve não pública');
+  });
+
+  it('resultado confirmado afirma só o campo public, sem falar em perfil (revisão Codex VIS-1)', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await waitFor(() => expect(publishButton()).toBeEnabled());
+    await user.click(publishButton());
+    const result = await screen.findByRole('region', { name: 'Resultado' });
+    expect(result).toHaveTextContent('playlist não pública');
+    expect(result).not.toHaveTextContent(/perfil/);
+  });
+
+  it('conferir de novo nunca cria playlist nem adiciona faixas, mesmo sem o job salvo (revisão Codex STATE-2)', async () => {
+    const { fake, local, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    fake.createAs = true;
+    fake.ignoreVisibilityChange = true;
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await waitFor(() => expect(publishButton()).toBeEnabled());
+    await user.click(publishButton());
+    await screen.findByText(/manteve a playlist pública/);
+    expect(local.data.size).toBeGreaterThan(0);
+    local.data.clear(); // job salvo sumiu (dados do navegador apagados, outra aba etc.)
+
+    await user.click(screen.getByRole('button', { name: 'Conferir visibilidade de novo' }));
+    await screen.findByRole('status');
+    expect(fake.count('POST', '/me/playlists')).toBe(1);
+    expect(fake.count('POST', '/playlists/pl1/items')).toBe(1);
+    expect(fake.playlists.size).toBe(1);
+    expect(within(screen.getByRole('region', { name: 'Resultado' })).getByRole('heading')).toHaveTextContent('Playlist publicada');
+  });
+
+  it('conferência repetida que falha não deixa o aviso de sucesso anterior (revisão Codex STATE-1)', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    fake.createAs = true;
+    fake.ignoreVisibilityChange = true;
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await waitFor(() => expect(publishButton()).toBeEnabled());
+    await user.click(publishButton());
+    await screen.findByText(/manteve a playlist pública/);
+    await user.click(screen.getByRole('button', { name: 'Conferir visibilidade de novo' }));
+    await screen.findByRole('status');
+
+    fake.fail('GET /playlists/pl1', new Response(JSON.stringify({ error: { message: 'Forbidden' } }), { status: 403 }));
+    await user.click(screen.getByRole('button', { name: 'Conferir visibilidade de novo' }));
+    await screen.findByText(/Não foi possível confirmar com o Spotify/);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Resultado' })).toHaveTextContent('visibilidade não confirmada');
   });
 
   it('Sair chama o logout', async () => {

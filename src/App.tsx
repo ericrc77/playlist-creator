@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { beginLogin, missingScopes, type AccessToken, type AuthConfig, type KVStore } from './lib/auth';
 import { findRepeatedRequests, parsePlaylistText, type PlaylistRequest, type TrackRequest } from './lib/contract';
 import type { MatchResult, SpotifyTrack } from './lib/matching';
-import { publish, type PublishOutcome, type PublishPlan, type Visibility } from './lib/publish';
+import { ensureVisibility, publish, type PublishOutcome, type PublishPlan, type Visibility } from './lib/publish';
 import { resolveTrack } from './lib/resolver';
 import type { SpotifyClient } from './lib/spotify';
 
@@ -225,7 +225,7 @@ export function App({ config, session, local, client, token, onLogout, navigate 
     });
   }
 
-  async function doPublish(confirmRecreate = false, retryVisibility = false) {
+  async function doPublish(confirmRecreate = false) {
     frozenPlan.current ??= {
       name: meta.name.trim(),
       description: meta.description.trim(),
@@ -237,16 +237,32 @@ export function App({ config, session, local, client, token, onLogout, navigate 
     setAttempted(true);
     setPublishError(null);
     try {
-      const result = await publish(client, plan, local, { confirmRecreate, retryVisibility, onProgress: (added, total) => setProgress({ added, total }) });
-      // Reconferir a visibilidade não é uma nova publicação: a tela mantém o título do resultado
-      // original e só informa que a conferência foi refeita.
-      setOutcome((prev) =>
-        retryVisibility && prev?.kind === 'done' && result.kind === 'done'
-          ? { ...result, alreadyPublished: prev.alreadyPublished }
-          : result,
-      );
-      setRechecked(retryVisibility && result.kind === 'done');
+      const result = await publish(client, plan, local, { confirmRecreate, onProgress: (added, total) => setProgress({ added, total }) });
+      setOutcome(result);
       if (result.kind === 'done') session.removeItem(DRAFT_KEY);
+    } catch (e) {
+      setPublishError((e as Error).message);
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  /**
+   * "Conferir visibilidade de novo": só lê (e, se preciso, corrige) o campo `public` da playlist já
+   * publicada. Não passa por publish(): não há caminho que crie playlist ou adicione faixas, mesmo
+   * se o job salvo tiver sumido. A tela mantém o resultado original e só atualiza a visibilidade.
+   */
+  async function recheckVisibility() {
+    if (outcome?.kind !== 'done') return;
+    const { playlistId } = outcome;
+    const wantPublic = frozenPlan.current?.public ?? meta.public;
+    setPublishing(true);
+    setRechecked(false);
+    setPublishError(null);
+    try {
+      const visibility = await ensureVisibility(client, playlistId, wantPublic);
+      setOutcome((prev) => (prev?.kind === 'done' && prev.playlistId === playlistId ? { ...prev, visibility } : prev));
+      setRechecked(true);
     } catch (e) {
       setPublishError((e as Error).message);
     } finally {
@@ -275,7 +291,7 @@ export function App({ config, session, local, client, token, onLogout, navigate 
           <p className="big">
             <strong>{outcome.added}</strong> faixa(s) confirmadas pelo Spotify · {visibilitySummary(outcome.visibility, meta.public)}
           </p>
-          {rechecked && !publishing && (
+          {rechecked && !publishing && outcome.visibility !== 'unknown' && (
             <p className="hint" role="status">
               Visibilidade conferida novamente com o Spotify. Nenhuma faixa foi adicionada.
             </p>
@@ -285,7 +301,7 @@ export function App({ config, session, local, client, token, onLogout, navigate 
               {publishError}
             </p>
           )}
-          <VisibilityNote outcome={outcome} wantPublic={meta.public} onRetry={() => doPublish(false, true)} busy={publishing} />
+          <VisibilityNote outcome={outcome} wantPublic={meta.public} onRetry={recheckVisibility} busy={publishing} />
           <a className="button" href={outcome.playlistUrl} target="_blank" rel="noreferrer">
             Abrir no Spotify
           </a>
@@ -493,7 +509,7 @@ function VisibilityNote({
   onRetry: () => void;
   busy: boolean;
 }) {
-  const option = `"${wantPublic ? 'no perfil' : 'fora do perfil'}"`;
+  const option = wantPublic ? 'pública' : 'não pública';
   if (outcome.visibility === 'mismatch' || outcome.visibility === 'unknown') {
     return (
       <div className="error" role="alert">
@@ -501,7 +517,7 @@ function VisibilityNote({
           {/* Só o que a API confirmou: o campo `public`. Se a playlist aparece no perfil, a API não diz. */}
           {outcome.visibility === 'mismatch'
             ? wantPublic
-              ? 'O Spotify manteve a playlist privada, apesar da solicitação para torná-la pública.'
+              ? 'O Spotify manteve a playlist não pública, apesar da solicitação para torná-la pública.'
               : 'O Spotify manteve a playlist pública, apesar da solicitação de privacidade.'
             : `Não foi possível confirmar com o Spotify se a playlist ficou ${option}.`}{' '}
           Confira de novo ou ajuste no app do Spotify, no menu da playlist.
@@ -526,9 +542,9 @@ function visibilitySummary(visibility: Visibility, wantPublic: boolean): string 
   switch (visibility) {
     case 'ok':
     case 'corrected':
-      return wantPublic ? 'no seu perfil' : 'fora do seu perfil';
+      return wantPublic ? 'playlist pública' : 'playlist não pública';
     case 'mismatch':
-      return wantPublic ? 'o Spotify manteve privada' : 'o Spotify manteve pública';
+      return wantPublic ? 'o Spotify manteve não pública' : 'o Spotify manteve pública';
     default:
       return 'visibilidade não confirmada';
   }
