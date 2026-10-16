@@ -1,23 +1,22 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from '../src/App';
-import { saveTokens, SCOPES } from '../src/lib/auth';
+import { SCOPES } from '../src/lib/auth';
 import { SpotifyClient } from '../src/lib/spotify';
 import { FakeSpotify } from './fakeSpotify';
 import { MemoryStore, track } from './helpers';
 
 const cfg = { clientId: 'a'.repeat(32), redirectUri: 'http://127.0.0.1:5173/callback' };
+const token = { accessToken: 'AT', expiresAt: Date.now() + 3600_000, scope: SCOPES.join(' ') };
 
-function setup({ connected = true } = {}) {
+function setup({ connected = true, session = new MemoryStore() } = {}) {
   const fake = new FakeSpotify();
-  const session = new MemoryStore();
   const local = new MemoryStore();
-  if (connected) saveTokens(session, { accessToken: 'AT', refreshToken: 'RT', expiresAt: Date.now() + 3600_000, scope: SCOPES.join(' ') });
-  const createClient = () =>
-    new SpotifyClient({ getAccessToken: async () => 'AT', onUnauthorized: async () => 'AT', fetchFn: fake.fetch, sleep: async () => {} });
+  const client = new SpotifyClient({ getAccessToken: async () => 'AT', onUnauthorized: async () => 'AT', fetchFn: fake.fetch, sleep: async () => {} });
   const navigate = vi.fn();
-  render(<App config={cfg} session={session} local={local} createClient={createClient} navigate={navigate} />);
-  return { fake, session, local, navigate, user: userEvent.setup() };
+  const onLogout = vi.fn();
+  render(<App config={cfg} session={session} local={local} client={client} token={connected ? token : null} onLogout={onLogout} navigate={navigate} />);
+  return { fake, session, local, navigate, onLogout, user: userEvent.setup() };
 }
 
 const payload = JSON.stringify({
@@ -30,79 +29,110 @@ const payload = JSON.stringify({
   ],
 });
 
-async function importPayload(user: ReturnType<typeof userEvent.setup>, text = payload) {
-  const box = screen.getByLabelText('JSON da playlist');
-  await user.clear(box);
-  await user.click(box);
+/** Só cola: a validação e a busca começam sozinhas. */
+async function paste(user: ReturnType<typeof userEvent.setup>, text = payload) {
+  await user.click(screen.getByLabelText('JSON da playlist'));
   await user.paste(text);
-  await user.click(screen.getByRole('button', { name: 'Validar e buscar faixas' }));
 }
 
+const publishButton = () => screen.getByRole('button', { name: /^(Publicar|Confira|Buscando|Publicando)/ });
+
 describe('App', () => {
-  it('pede o Client ID quando não configurado e nunca o secret', () => {
-    const session = new MemoryStore();
-    render(<App config={{ ...cfg, clientId: '' }} session={session} local={new MemoryStore()} />);
-    expect(screen.getByText(/nunca informe o Client/)).toBeInTheDocument();
-    expect(screen.getByText(cfg.redirectUri)).toBeInTheDocument();
+  it('explica a configuração quando o Client ID não está no ambiente', () => {
+    setup({ connected: false });
+    // render extra com config vazia
+    render(
+      <App config={{ ...cfg, clientId: '' }} session={new MemoryStore()} local={new MemoryStore()} client={{} as SpotifyClient} token={null} onLogout={() => {}} />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('VITE_SPOTIFY_CLIENT_ID');
+    expect(screen.queryByText(/secret/i)).not.toBeInTheDocument();
   });
 
-  it('redireciona para o login do Spotify com PKCE', async () => {
-    const { navigate, user } = setup({ connected: false });
+  it('conecta com PKCE e guarda o JSON colado para depois do login', async () => {
+    const { navigate, session, user } = setup({ connected: false });
+    await paste(user);
     await user.click(screen.getByRole('button', { name: 'Conectar ao Spotify' }));
     expect(navigate).toHaveBeenCalledWith(expect.stringMatching(/^https:\/\/accounts\.spotify\.com\/authorize\?.*code_challenge_method=S256/));
+    expect(session.getItem('mum.draft')).toBe(payload);
   });
 
-  it('mostra erros de schema compreensíveis', async () => {
+  it('retoma o JSON salvo após o login e já busca as faixas', async () => {
+    const session = new MemoryStore();
+    session.setItem('mum.draft', payload);
+    const { fake } = setup({ session });
+    await waitFor(() => expect(fake.count('GET', '/search')).toBeGreaterThan(0));
+    expect(await screen.findByDisplayValue('Passando roupa')).toBeInTheDocument();
+  });
+
+  it('mostra erros de schema compreensíveis ao colar', async () => {
     const { user } = setup();
-    await importPayload(user, '{"schema_version":"1.0","tracks":[]}');
-    expect(screen.getByRole('alert')).toHaveTextContent(/"playlist" ausente/);
+    await paste(user, '{"schema_version":"1.0","tracks":[]}');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/"playlist" ausente/);
   });
 
-  it('fluxo completo: conferir, resolver pendências, prévia e publicar só após clique', async () => {
+  it('colar → conferir só as dúvidas → publicar fora do perfil', async () => {
     const { fake, user } = setup();
     const mitsubishi = track('Mitsubishi', ['Orochi', 'Kizzy']);
     const paypalE = track('Paypal', ['Teto'], { explicit: true });
     const paypalClean = track('Paypal', ['Teto'], { explicit: false });
     fake.catalog = [mitsubishi, paypalE, paypalClean];
 
-    await importPayload(user);
-    await waitFor(() => expect(screen.getByTestId('track-2')).toHaveTextContent('Não encontrada'));
-    expect(screen.getByTestId('track-0')).toHaveTextContent('Encontrada');
+    await paste(user);
+    await waitFor(() => expect(publishButton()).toHaveTextContent('Confira 2 faixas'));
+    // Só as duas dúvidas aparecem para conferir; a encontrada não pede clique.
+    expect(screen.queryByTestId('track-0')).not.toBeInTheDocument();
     expect(screen.getByTestId('track-1')).toHaveTextContent('Precisa de confirmação');
-
-    const next = screen.getByRole('button', { name: /Faltam 2 decisão/ });
-    expect(next).toBeDisabled();
-
-    // Escolhe a versão explícita e pula a inexistente.
-    const row1 = within(screen.getByTestId('track-1'));
-    await user.click(row1.getAllByRole('radio')[0]);
-    await user.click(within(screen.getByTestId('track-2')).getByLabelText(/Pular esta faixa/));
-    await user.click(screen.getByRole('button', { name: 'Ir para a prévia' }));
-
-    expect(screen.getByText(/serão adicionadas/)).toHaveTextContent('2 faixa(s) serão adicionadas · Privada');
+    expect(screen.getByTestId('track-2')).toHaveTextContent('Não encontrada');
     expect(fake.count('POST', '/me/playlists')).toBe(0);
+    expect(screen.getByRole('switch')).toBeChecked(); // padrão: fora do perfil
 
-    // Reordena: Paypal antes de Mitsubishi.
-    await user.click(screen.getByRole('button', { name: 'Descer posição 1' }));
-    await user.click(screen.getByRole('button', { name: /Publicar no Spotify \(2 faixas\)/ }));
+    await user.click(within(screen.getByTestId('track-1')).getAllByRole('radio')[0]);
+    await user.click(within(screen.getByTestId('track-2')).getByLabelText(/Pular esta faixa/));
+    expect(publishButton()).toHaveTextContent('Publicar 2 faixas');
 
-    await screen.findByText(/Playlist publicada/);
-    expect(screen.getByRole('link', { name: 'https://open.spotify.com/playlist/pl1' })).toBeInTheDocument();
+    await user.click(publishButton());
+    await screen.findByText('Playlist publicada');
+    expect(screen.getByRole('link', { name: 'Abrir no Spotify' })).toHaveAttribute('href', 'https://open.spotify.com/playlist/pl1');
+    expect(screen.getByText(/Tornar privada/)).toBeInTheDocument();
     const pl = fake.playlists.get('pl1')!;
     expect(pl.public).toBe(false);
-    expect(pl.items).toEqual([paypalE.uri, mitsubishi.uri]);
-    expect(screen.getByText(/Inexistente — Ninguém/)).toBeInTheDocument();
+    expect(pl.items).toEqual([mitsubishi.uri, paypalE.uri]);
+    expect(screen.getByText(/1 faixa\(s\) puladas/)).toBeInTheDocument();
+  });
+
+  it('avisa quando o JSON pede playlist pública e respeita a escolha', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X', public: true }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await screen.findByText(/JSON pede playlist pública/);
+    expect(screen.getByRole('switch')).not.toBeChecked();
+    await user.click(screen.getByRole('switch'));
+    await waitFor(() => expect(publishButton()).toHaveTextContent('Publicar 1 faixa'));
+    await user.click(publishButton());
+    await screen.findByText('Playlist publicada');
+    expect(fake.playlists.get('pl1')!.public).toBe(false);
+  });
+
+  it('informa quando corrigiu a visibilidade criada errada pelo Spotify', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    fake.createAs = true;
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await waitFor(() => expect(publishButton()).toBeEnabled());
+    await user.click(publishButton());
+    await screen.findByText(/o app corrigiu/);
+    expect(fake.playlists.get('pl1')!.public).toBe(false);
   });
 
   it('busca manual substitui as candidatas', async () => {
     const { fake, user } = setup();
     fake.catalog = [track('Mitsubishi', ['Orochi', 'Kizzy'])];
-    await importPayload(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Mitsubichi', artists: ['Orochi'] }] }));
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Mitsubichi', artists: ['Orochi'] }] }));
     await waitFor(() => expect(screen.getByTestId('track-0')).toHaveTextContent('Não encontrada'));
     const box = screen.getByLabelText('Busca manual');
     await user.clear(box);
     await user.type(box, 'mitsubishi');
-    await user.click(screen.getByRole('button', { name: 'Buscar manualmente' }));
+    await user.click(screen.getByRole('button', { name: 'Buscar' }));
     await waitFor(() => expect(screen.getByTestId('track-0')).toHaveTextContent('Mitsubishi — Orochi, Kizzy'));
   });
 
@@ -110,15 +140,20 @@ describe('App', () => {
     const { fake, user } = setup();
     fake.catalog = [track('Paypal', ['Teto'])];
     fake.fail('POST /playlists/pl1/items', 'network');
-    await importPayload(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Ir para a prévia' })).toBeEnabled());
-    await user.click(screen.getByRole('button', { name: 'Ir para a prévia' }));
-    await user.click(screen.getByRole('button', { name: /Publicar no Spotify/ }));
-    await screen.findByText(/retoma de onde parou/);
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await waitFor(() => expect(publishButton()).toBeEnabled());
+    await user.click(publishButton());
+    await screen.findByText(/continua de onde parou/);
     expect(screen.getByDisplayValue('X')).toBeDisabled();
-    await user.click(screen.getByRole('button', { name: /Publicar no Spotify/ }));
-    await screen.findByText(/Playlist publicada/);
+    await user.click(publishButton());
+    await screen.findByText('Playlist publicada');
     expect(fake.count('POST', '/me/playlists')).toBe(1);
     expect(fake.playlists.get('pl1')!.items).toHaveLength(1);
+  });
+
+  it('Sair chama o logout', async () => {
+    const { onLogout, user } = setup();
+    await user.click(screen.getByRole('button', { name: 'Sair' }));
+    expect(onLogout).toHaveBeenCalled();
   });
 });

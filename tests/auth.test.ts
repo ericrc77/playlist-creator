@@ -1,4 +1,5 @@
-import { beginLogin, codeChallenge, completeLogin, loadTokens, missingScopes, randomString, refreshTokens, SCOPES } from '../src/lib/auth';
+import { beginLogin, codeChallenge, completeLogin, missingScopes, randomString, refreshAccess, SCOPES } from '../src/lib/auth';
+import { AuthSession } from '../src/lib/session';
 import { jsonResponse, MemoryStore } from './helpers';
 
 const cfg = { clientId: 'a'.repeat(32), redirectUri: 'http://127.0.0.1:5173/callback' };
@@ -36,58 +37,92 @@ describe('completeLogin', () => {
     return { store, state: url.searchParams.get('state')!, verifier: store.getItem('mum.pkce.verifier')! };
   }
 
-  it('troca o code por tokens com o verifier, sem client secret', async () => {
+  it('manda code e verifier ao servidor do app (não ao Spotify) e não guarda token no storage', async () => {
     const { store, state, verifier } = await setup();
-    const fetchFn = vi.fn(async () => jsonResponse(200, { access_token: 'AT', refresh_token: 'RT', expires_in: 3600, scope: SCOPES.join(' ') }));
-    const tokens = await completeLogin(cfg, `${cfg.redirectUri}?code=C&state=${state}`, store, fetchFn as unknown as typeof fetch, () => 1000);
-    expect(tokens).toEqual({ accessToken: 'AT', refreshToken: 'RT', expiresAt: 1000 + 3600_000, scope: SCOPES.join(' ') });
+    const fetchFn = vi.fn(async () => jsonResponse(200, { accessToken: 'AT', expiresAt: 5, scope: SCOPES.join(' ') }));
+    const t = await completeLogin(`${cfg.redirectUri}?code=C&state=${state}`, store, fetchFn as unknown as typeof fetch);
+    expect(t).toEqual({ accessToken: 'AT', expiresAt: 5, scope: SCOPES.join(' ') });
     const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://accounts.spotify.com/api/token');
-    const body = new URLSearchParams(String(init.body));
-    expect(body.get('code_verifier')).toBe(verifier);
-    expect(body.get('grant_type')).toBe('authorization_code');
-    expect(body.has('client_secret')).toBe(false);
-    expect(loadTokens(store)?.accessToken).toBe('AT');
-    expect(store.getItem('mum.pkce.verifier')).toBeNull();
+    expect(url).toBe('/api/auth/exchange');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>)['X-MUM']).toBe('1');
+    expect(JSON.parse(String(init.body))).toEqual({ code: 'C', codeVerifier: verifier });
+    expect([...store.data.keys()]).toEqual([]);
   });
 
-  it('recusa state diferente (CSRF)', async () => {
+  it('recusa state diferente (CSRF) sem chamar o servidor', async () => {
     const { store } = await setup();
     const fetchFn = vi.fn();
-    await expect(completeLogin(cfg, `${cfg.redirectUri}?code=C&state=outro`, store, fetchFn as unknown as typeof fetch)).rejects.toThrow(/state/);
+    await expect(completeLogin(`${cfg.redirectUri}?code=C&state=outro`, store, fetchFn as unknown as typeof fetch)).rejects.toThrow(/state/);
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('confere o state antes de mostrar erro vindo na URL', async () => {
+    const { store } = await setup();
+    await expect(completeLogin(`${cfg.redirectUri}?error=access_denied&state=forjado`, store)).rejects.toThrow(/state/);
   });
 
   it('explica quando o usuário recusa', async () => {
     const { store, state } = await setup();
-    await expect(completeLogin(cfg, `${cfg.redirectUri}?error=access_denied&state=${state}`, store)).rejects.toThrow(/recusou/);
+    await expect(completeLogin(`${cfg.redirectUri}?error=access_denied&state=${state}`, store)).rejects.toThrow(/recusou/);
   });
 
-  it('confere o state antes de tratar um retorno de erro (revisão Codex F5)', async () => {
-    const { store } = await setup();
-    await expect(completeLogin(cfg, `${cfg.redirectUri}?error=access_denied`, store)).rejects.toThrow(/state/);
-    await expect(completeLogin(cfg, `${cfg.redirectUri}?error=access_denied&state=outro`, store)).rejects.toThrow(/state/);
-  });
-
-  it('mantém os escopos quando a resposta não traz `scope` (revisão Codex F6)', async () => {
+  it('mostra a mensagem do servidor quando a troca falha', async () => {
     const { store, state } = await setup();
-    const login = vi.fn(async () => jsonResponse(200, { access_token: 'AT', refresh_token: 'RT', expires_in: 3600 }));
-    const t = await completeLogin(cfg, `${cfg.redirectUri}?code=C&state=${state}`, store, login as unknown as typeof fetch, () => 0);
-    expect(missingScopes(t)).toEqual([]);
-    const refresh = vi.fn(async () => jsonResponse(200, { access_token: 'AT2', expires_in: 3600 }));
-    const r = await refreshTokens(cfg, { ...t, scope: 'playlist-modify-private' }, store, refresh as unknown as typeof fetch, () => 0);
-    expect(r.scope).toBe('playlist-modify-private');
-  });
-
-  it('mantém o refresh token anterior quando o Spotify não envia outro', async () => {
-    const store = new MemoryStore();
-    const fetchFn = vi.fn(async () => jsonResponse(200, { access_token: 'AT2', expires_in: 3600, scope: '' }));
-    const t = await refreshTokens(cfg, { accessToken: 'AT', refreshToken: 'RT', expiresAt: 0, scope: '' }, store, fetchFn as unknown as typeof fetch, () => 0);
-    expect(t.refreshToken).toBe('RT');
-    expect(t.accessToken).toBe('AT2');
+    const fetchFn = vi.fn(async () => jsonResponse(500, { error: 'config', message: 'SESSION_SECRET não está configurado' }));
+    await expect(completeLogin(`${cfg.redirectUri}?code=C&state=${state}`, store, fetchFn as unknown as typeof fetch)).rejects.toThrow(/SESSION_SECRET/);
   });
 
   it('detecta escopos faltando', () => {
     expect(missingScopes({ accessToken: '', expiresAt: 0, scope: 'playlist-modify-private' })).toEqual(['playlist-modify-public']);
+  });
+});
+
+describe('AuthSession', () => {
+  it('restaura a sessão pelo cookie e mantém o token só em memória', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, { accessToken: 'AT', expiresAt: 10_000_000, scope: '' }));
+    const onChange = vi.fn();
+    const s = new AuthSession(onChange, fetchFn as unknown as typeof fetch, () => 0);
+    expect(await s.restore()).toBe(true);
+    expect(await s.accessToken()).toBe('AT');
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it('sem cookie: restore devolve false', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(401, { error: 'no_session', message: 'Conecte o Spotify.' }));
+    const onChange = vi.fn();
+    const s = new AuthSession(onChange, fetchFn as unknown as typeof fetch);
+    expect(await s.restore()).toBe(false);
+    expect(onChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('renova perto de expirar, com uma única requisição para chamadas simultâneas', async () => {
+    let n = 0;
+    const fetchFn = vi.fn(async () => jsonResponse(200, { accessToken: `AT${++n}`, expiresAt: 30_000, scope: '' }));
+    const s = new AuthSession(() => {}, fetchFn as unknown as typeof fetch, () => 0);
+    const [a, b] = await Promise.all([s.accessToken(), s.accessToken()]);
+    expect(a).toBe('AT1');
+    expect(b).toBe('AT1');
+    // expira em 30 s (< margem de 60 s): a próxima chamada renova
+    expect(await s.accessToken()).toBe('AT2');
+  });
+
+  it('falha temporária na renovação não desconecta', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(502, { message: 'Falha de conexão com o Spotify.' }));
+    const onChange = vi.fn();
+    const s = new AuthSession(onChange, fetchFn as unknown as typeof fetch);
+    await expect(refreshAccess(fetchFn as unknown as typeof fetch)).rejects.toThrow(/Falha/);
+    await expect(s.refresh()).rejects.toThrow();
+    expect(onChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it('logout chama o servidor para apagar o cookie', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, { ok: true }));
+    const onChange = vi.fn();
+    const s = new AuthSession(onChange, fetchFn as unknown as typeof fetch);
+    await s.logout();
+    expect((fetchFn.mock.calls[0] as unknown as [string])[0]).toBe('/api/auth/logout');
+    expect(onChange).toHaveBeenLastCalledWith(false);
   });
 });

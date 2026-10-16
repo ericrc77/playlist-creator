@@ -1,59 +1,77 @@
-// Liga configuração, tokens e o cliente da API.
+// Sessão do Spotify no navegador: access token em memória, renovado pelo cookie HttpOnly.
 
-import { clearTokens, loadTokens, refreshTokens, type AuthConfig, type KVStore, type Tokens } from './auth';
+import { AuthError, logout, refreshAccess, type AccessToken, type AuthConfig } from './auth';
 import { SpotifyClient } from './spotify';
 
-const CLIENT_ID_KEY = 'mum.clientId';
-
-export function readConfig(local: KVStore, origin: string): AuthConfig {
-  const envId = (import.meta.env.VITE_SPOTIFY_CLIENT_ID as string | undefined)?.trim();
-  const envRedirect = (import.meta.env.VITE_SPOTIFY_REDIRECT_URI as string | undefined)?.trim();
-  return {
-    clientId: envId || local.getItem(CLIENT_ID_KEY) || '',
-    redirectUri: envRedirect || `${origin}/callback`,
-  };
+export function readConfig(origin: string): AuthConfig {
+  const clientId = ((import.meta.env.VITE_SPOTIFY_CLIENT_ID as string | undefined) ?? '').trim();
+  // O servidor usa sempre `${origin}/callback`; o navegador precisa usar o mesmo valor.
+  return { clientId, redirectUri: `${origin}/callback` };
 }
 
-export function saveClientId(local: KVStore, clientId: string) {
-  local.setItem(CLIENT_ID_KEY, clientId.trim());
-}
+export class AuthSession {
+  private token: AccessToken | null = null;
+  private refreshing: Promise<AccessToken> | null = null;
 
-/** O Client ID do Spotify tem 32 caracteres hexadecimais. */
-export function isValidClientId(id: string): boolean {
-  return /^[0-9a-f]{32}$/i.test(id.trim());
-}
+  constructor(
+    private onChange: (connected: boolean) => void,
+    private fetchFn: typeof fetch = (...a) => fetch(...a),
+    private now: () => number = Date.now,
+  ) {}
 
-export function makeClient(
-  cfg: AuthConfig,
-  store: KVStore,
-  onLoggedOut: () => void,
-  fetchFn?: typeof fetch,
-  now: () => number = Date.now,
-): SpotifyClient {
-  let refreshing: Promise<Tokens> | null = null;
-  const refresh = async (): Promise<Tokens> => {
-    const current = loadTokens(store);
-    if (!current) throw new Error('Não conectado ao Spotify.');
-    refreshing ??= refreshTokens(cfg, current, store, fetchFn, now).finally(() => (refreshing = null));
+  get current(): AccessToken | null {
+    return this.token;
+  }
+
+  set(token: AccessToken) {
+    this.token = token;
+    this.onChange(true);
+  }
+
+  /** Renovação com uma única requisição em voo (várias chamadas simultâneas esperam a mesma). */
+  refresh(): Promise<AccessToken> {
+    this.refreshing ??= refreshAccess(this.fetchFn)
+      .then((t) => {
+        this.set(t);
+        return t;
+      })
+      .catch((e) => {
+        if (e instanceof AuthError && e.loggedOut) {
+          this.token = null;
+          this.onChange(false);
+        }
+        throw e;
+      })
+      .finally(() => (this.refreshing = null));
+    return this.refreshing;
+  }
+
+  /** Tenta recuperar a sessão ao abrir o app. Retorna false se não houver sessão. */
+  async restore(): Promise<boolean> {
     try {
-      return await refreshing;
-    } catch (e) {
-      clearTokens(store);
-      onLoggedOut();
-      throw e;
+      await this.refresh();
+      return true;
+    } catch {
+      return false;
     }
-  };
-  return new SpotifyClient({
-    fetchFn,
-    getAccessToken: async () => {
-      const t = loadTokens(store);
-      if (!t) {
-        onLoggedOut();
-        throw new Error('Não conectado ao Spotify.');
-      }
-      if (t.expiresAt - 60_000 > now()) return t.accessToken;
-      return (await refresh()).accessToken;
-    },
-    onUnauthorized: async () => (await refresh()).accessToken,
-  });
+  }
+
+  async accessToken(): Promise<string> {
+    if (this.token && this.token.expiresAt - 60_000 > this.now()) return this.token.accessToken;
+    return (await this.refresh()).accessToken;
+  }
+
+  async logout() {
+    this.token = null;
+    await logout(this.fetchFn);
+    this.onChange(false);
+  }
+
+  client(fetchFn?: typeof fetch): SpotifyClient {
+    return new SpotifyClient({
+      fetchFn,
+      getAccessToken: () => this.accessToken(),
+      onUnauthorized: async () => (await this.refresh()).accessToken,
+    });
+  }
 }
