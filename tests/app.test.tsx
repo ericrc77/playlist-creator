@@ -239,6 +239,63 @@ describe('App', () => {
     expect(fake.count('POST', '/me/playlists')).toBe(1);
   });
 
+  it('Spotify mantém pública: mensagem sem afirmar o perfil e título estável ao conferir de novo', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    fake.createAs = true; // criou pública…
+    fake.ignoreVisibilityChange = true; // …e ignorou a correção (caso real de 2026-10-16)
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await waitFor(() => expect(publishButton()).toBeEnabled());
+    await user.click(publishButton());
+
+    const result = await screen.findByRole('region', { name: 'Resultado' });
+    expect(within(result).getByRole('heading')).toHaveTextContent('Playlist publicada');
+    expect(result).toHaveTextContent('O Spotify manteve a playlist pública, apesar da solicitação de privacidade.');
+    expect(result).toHaveTextContent('o Spotify manteve pública');
+    expect(result).not.toHaveTextContent(/não confirmada|no seu perfil|aparece no/);
+
+    const items = fake.count('POST', '/playlists/pl1/items');
+    await user.click(screen.getByRole('button', { name: 'Conferir visibilidade de novo' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Visibilidade conferida novamente');
+    expect(within(result).getByRole('heading')).toHaveTextContent('Playlist publicada');
+    expect(result).not.toHaveTextContent(/já estava publicada/);
+    expect(result).toHaveTextContent('O Spotify manteve a playlist pública, apesar da solicitação de privacidade.');
+    expect(fake.count('POST', '/me/playlists')).toBe(1);
+    expect(fake.count('POST', '/playlists/pl1/items')).toBe(items);
+  });
+
+  it('conferir de novo quando o Spotify passa a aceitar: mostra o valor confirmado, sem falar em nova publicação', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    fake.createAs = true;
+    fake.ignoreVisibilityChange = true;
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X' }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await waitFor(() => expect(publishButton()).toBeEnabled());
+    await user.click(publishButton());
+    await screen.findByText(/manteve a playlist pública/);
+
+    fake.ignoreVisibilityChange = false;
+    await user.click(screen.getByRole('button', { name: 'Conferir visibilidade de novo' }));
+    const result = screen.getByRole('region', { name: 'Resultado' });
+    await waitFor(() => expect(result).toHaveTextContent('fora do seu perfil'));
+    expect(within(result).getByRole('heading')).toHaveTextContent('Playlist publicada');
+    expect(screen.getByRole('status')).toHaveTextContent('Nenhuma faixa foi adicionada');
+    expect(fake.playlists.get('pl1')!.public).toBe(false);
+  });
+
+  it('Spotify mantém privada quando o pedido era público: mensagem simétrica', async () => {
+    const { fake, user } = setup();
+    fake.catalog = [track('Paypal', ['Teto'])];
+    fake.createAs = false;
+    fake.ignoreVisibilityChange = true;
+    await paste(user, JSON.stringify({ schema_version: '1.0', playlist: { name: 'X', public: true }, tracks: [{ title: 'Paypal', artists: ['Teto'] }] }));
+    await waitFor(() => expect(publishButton()).toBeEnabled());
+    await user.click(publishButton());
+    const result = await screen.findByRole('region', { name: 'Resultado' });
+    expect(result).toHaveTextContent('O Spotify manteve a playlist privada, apesar da solicitação para torná-la pública.');
+    expect(result).toHaveTextContent('o Spotify manteve privada');
+  });
+
   it('Sair chama o logout', async () => {
     const { onLogout, user } = setup();
     await user.click(screen.getByRole('button', { name: 'Sair' }));

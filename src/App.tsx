@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { beginLogin, missingScopes, type AccessToken, type AuthConfig, type KVStore } from './lib/auth';
 import { findRepeatedRequests, parsePlaylistText, type PlaylistRequest, type TrackRequest } from './lib/contract';
 import type { MatchResult, SpotifyTrack } from './lib/matching';
-import { publish, type PublishOutcome, type PublishPlan } from './lib/publish';
+import { publish, type PublishOutcome, type PublishPlan, type Visibility } from './lib/publish';
 import { resolveTrack } from './lib/resolver';
 import type { SpotifyClient } from './lib/spotify';
 
@@ -44,6 +44,8 @@ export function App({ config, session, local, client, token, onLogout, navigate 
   const [progress, setProgress] = useState<{ added: number; total: number } | null>(null);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<PublishOutcome | null>(null);
+  /** A tela de resultado mostra uma conferência de visibilidade refeita a pedido do usuário. */
+  const [rechecked, setRechecked] = useState(false);
   // Depois de uma tentativa de publicação, o plano fica travado: mudar nome, ordem ou faixas
   // geraria outro job e poderia criar uma segunda playlist.
   const [attempted, setAttempted] = useState(false);
@@ -144,6 +146,7 @@ export function App({ config, session, local, client, token, onLogout, navigate 
     frozenPlan.current = null;
     searchSeq.current.clear();
     setAttempted(false);
+    setRechecked(false);
   }
 
   /** Invalida a busca manual em voo da faixa e devolve o número da próxima. */
@@ -235,7 +238,14 @@ export function App({ config, session, local, client, token, onLogout, navigate 
     setPublishError(null);
     try {
       const result = await publish(client, plan, local, { confirmRecreate, retryVisibility, onProgress: (added, total) => setProgress({ added, total }) });
-      setOutcome(result);
+      // Reconferir a visibilidade não é uma nova publicação: a tela mantém o título do resultado
+      // original e só informa que a conferência foi refeita.
+      setOutcome((prev) =>
+        retryVisibility && prev?.kind === 'done' && result.kind === 'done'
+          ? { ...result, alreadyPublished: prev.alreadyPublished }
+          : result,
+      );
+      setRechecked(retryVisibility && result.kind === 'done');
       if (result.kind === 'done') session.removeItem(DRAFT_KEY);
     } catch (e) {
       setPublishError((e as Error).message);
@@ -263,13 +273,18 @@ export function App({ config, session, local, client, token, onLogout, navigate 
         <section className="card result" aria-label="Resultado">
           <h2>{outcome.alreadyPublished ? 'Essa playlist já estava publicada' : 'Playlist publicada'}</h2>
           <p className="big">
-            <strong>{outcome.added}</strong> faixa(s) confirmadas pelo Spotify ·{' '}
-            {outcome.visibility === 'ok' || outcome.visibility === 'corrected'
-              ? meta.public
-                ? 'no seu perfil'
-                : 'fora do seu perfil'
-              : 'visibilidade não confirmada'}
+            <strong>{outcome.added}</strong> faixa(s) confirmadas pelo Spotify · {visibilitySummary(outcome.visibility, meta.public)}
           </p>
+          {rechecked && !publishing && (
+            <p className="hint" role="status">
+              Visibilidade conferida novamente com o Spotify. Nenhuma faixa foi adicionada.
+            </p>
+          )}
+          {publishError && (
+            <p className="error" role="alert">
+              {publishError}
+            </p>
+          )}
           <VisibilityNote outcome={outcome} wantPublic={meta.public} onRetry={() => doPublish(false, true)} busy={publishing} />
           <a className="button" href={outcome.playlistUrl} target="_blank" rel="noreferrer">
             Abrir no Spotify
@@ -483,8 +498,11 @@ function VisibilityNote({
     return (
       <div className="error" role="alert">
         <p>
+          {/* Só o que a API confirmou: o campo `public`. Se a playlist aparece no perfil, a API não diz. */}
           {outcome.visibility === 'mismatch'
-            ? `O Spotify não aplicou a opção ${option}.`
+            ? wantPublic
+              ? 'O Spotify manteve a playlist privada, apesar da solicitação para torná-la pública.'
+              : 'O Spotify manteve a playlist pública, apesar da solicitação de privacidade.'
             : `Não foi possível confirmar com o Spotify se a playlist ficou ${option}.`}{' '}
           Confira de novo ou ajuste no app do Spotify, no menu da playlist.
         </p>
@@ -501,6 +519,19 @@ function VisibilityNote({
         'Para bloquear também quem tem o link, use "Tornar privada" no menu da playlist no app do Spotify: a API não oferece essa opção.'}
     </p>
   );
+}
+
+/** Resumo da visibilidade na linha de resultado: afirma só o que a API confirmou. */
+function visibilitySummary(visibility: Visibility, wantPublic: boolean): string {
+  switch (visibility) {
+    case 'ok':
+    case 'corrected':
+      return wantPublic ? 'no seu perfil' : 'fora do seu perfil';
+    case 'mismatch':
+      return wantPublic ? 'o Spotify manteve privada' : 'o Spotify manteve pública';
+    default:
+      return 'visibilidade não confirmada';
+  }
 }
 
 function describeRequest(req: TrackRequest): string {
