@@ -16,6 +16,8 @@ export const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
 export const CSRF_HEADER = 'x-mum';
 const COOKIE_BASE = 'mum_rt';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 180; // 180 dias; renovado a cada uso
+/** Prazo da chamada ao Spotify; precisa ser menor que AUTH_TIMEOUT_MS (15 s) do navegador. */
+export const SPOTIFY_TIMEOUT_MS = 8_000;
 
 export interface AuthEnv {
   clientId: string;
@@ -23,6 +25,8 @@ export interface AuthEnv {
   sessionSecret: string;
   fetchFn?: typeof fetch;
   now?: () => number;
+  /** Só para testes; o padrão é SPOTIFY_TIMEOUT_MS. */
+  spotifyTimeoutMs?: number;
 }
 
 export interface SessionPayload {
@@ -139,6 +143,7 @@ export async function handleAuth(request: Request, action: string, env: AuthEnv)
   }
 
   const fetchFn = env.fetchFn ?? fetch;
+  const timeoutMs = env.spotifyTimeoutMs ?? SPOTIFY_TIMEOUT_MS;
   const now = env.now ?? Date.now;
   const name = cookieName(url);
   const clear = { 'Set-Cookie': setCookie(url, '', 0) };
@@ -161,7 +166,7 @@ export async function handleAuth(request: Request, action: string, env: AuthEnv)
         redirect_uri: `${url.origin}/callback`,
         client_id: env.clientId,
         code_verifier: body.codeVerifier,
-      });
+      }, timeoutMs);
       if (!res.ok) return fail(res.status === 400 ? 400 : 502, 'spotify', res.message);
       if (!res.body.refresh_token) return fail(502, 'spotify', 'O Spotify não devolveu refresh token.');
       return issue(url, env, now, res.body, res.body.refresh_token, '');
@@ -171,7 +176,7 @@ export async function handleAuth(request: Request, action: string, env: AuthEnv)
       const sealed = readCookie(request, name);
       const session = sealed ? await openSession(env.sessionSecret, sealed, now()) : null;
       if (!session) return fail(401, 'no_session', 'Conecte o Spotify.', sealed ? clear : {});
-      const res = await spotifyToken(fetchFn, { grant_type: 'refresh_token', refresh_token: session.rt, client_id: env.clientId });
+      const res = await spotifyToken(fetchFn, { grant_type: 'refresh_token', refresh_token: session.rt, client_id: env.clientId }, timeoutMs);
       if (!res.ok) {
         // Só invalid_grant (acesso revogado, refresh token vencido ou já substituído) encerra a
         // sessão. invalid_client e afins são erro de configuração: o cookie continua válido e volta
@@ -194,20 +199,32 @@ interface SpotifyTokenBody {
   scope?: string;
 }
 
-async function spotifyToken(
-  fetchFn: typeof fetch,
-  params: Record<string, string>,
-): Promise<{ ok: true; body: SpotifyTokenBody } | { ok: false; status: number; error: string; message: string }> {
-  let res: Response;
+type TokenResult = { ok: true; body: SpotifyTokenBody } | { ok: false; status: number; error: string; message: string };
+
+async function spotifyToken(fetchFn: typeof fetch, params: Record<string, string>, timeoutMs: number): Promise<TokenResult> {
+  // Prazo menor que o do navegador (AUTH_TIMEOUT_MS em src/lib/auth.ts): o servidor sempre responde
+  // antes de o navegador desistir. Se o navegador abortasse primeiro e o Spotify rotacionasse o
+  // refresh token depois, o cookie novo nunca chegaria e a sessão se perderia.
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
   try {
-    res = await fetchFn(SPOTIFY_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(params),
-    });
+    return await readToken(fetchFn, params, abort.signal);
   } catch {
-    return { ok: false, status: 502, error: 'network', message: 'Falha de conexão com o Spotify.' };
+    return abort.signal.aborted
+      ? { ok: false, status: 504, error: 'timeout', message: 'O Spotify demorou demais para responder. Tente de novo.' }
+      : { ok: false, status: 502, error: 'network', message: 'Falha de conexão com o Spotify.' };
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+async function readToken(fetchFn: typeof fetch, params: Record<string, string>, signal: AbortSignal): Promise<TokenResult> {
+  const res = await fetchFn(SPOTIFY_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(params),
+    signal,
+  });
   if (!res.ok) {
     let detail = '';
     let error = '';

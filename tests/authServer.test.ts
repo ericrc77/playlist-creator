@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { handleAuth, openSession, sealSession, SPOTIFY_TOKEN_URL, type AuthEnv } from '../server/authHandler';
+import { handleAuth, openSession, sealSession, SPOTIFY_TIMEOUT_MS, SPOTIFY_TOKEN_URL, type AuthEnv } from '../server/authHandler';
+import { AUTH_TIMEOUT_MS } from '../src/lib/auth';
 
 const SECRET = 's'.repeat(40);
 const PROD = 'https://mum.vercel.app';
@@ -170,6 +171,27 @@ describe('/api/auth/refresh', () => {
     expect(res.status).toBe(401);
     expect(cookieFrom(res)).toContain('Max-Age=0');
     expect(s.calls).toHaveLength(0);
+  });
+
+  it('Spotify lento: o servidor desiste antes do navegador, responde 502 e mantém o cookie (revisão Codex NEW-AUTH-4)', async () => {
+    // Se o navegador abortasse primeiro, um refresh token rotacionado depois nunca chegaria ao cookie.
+    expect(SPOTIFY_TIMEOUT_MS).toBeLessThan(AUTH_TIMEOUT_MS);
+    const cookie = await loggedCookie();
+    let aborted = false;
+    const fetchFn = vi.fn(
+      (_url: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_, reject) =>
+          init?.signal?.addEventListener('abort', () => {
+            aborted = true;
+            reject(new DOMException('aborted', 'AbortError'));
+          }),
+        ),
+    ) as unknown as typeof fetch;
+    const res = await handleAuth(req(PROD, 'refresh', { cookie }), 'refresh', { ...env(fetchFn), spotifyTimeoutMs: 20 });
+    expect(aborted).toBe(true);
+    expect(res.status).toBe(502);
+    expect((await res.json()).message).toMatch(/demorou demais/);
+    expect(res.headers.get('set-cookie')).toBeNull();
   });
 
   it('falha temporária do Spotify: 502 e mantém o cookie', async () => {
