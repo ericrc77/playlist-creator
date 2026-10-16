@@ -52,3 +52,42 @@ real e verificação final da ordem, endpoints de fevereiro de 2026.
   @vitest/mocker, tinypool; 2 críticas, 1 moderada) que só afetam a máquina de quem roda os testes. A correção exige
   migrar para vitest 5 (mudança incompatível); fica para um PR separado.
 - Web Locks depende do navegador; sem suporte, a proteção vale só dentro da mesma aba.
+
+### 2026-10-16 · Revisão de segurança, autenticação e publicação (login persistente)
+
+**Como rodou:** Claude Code no computador do usuário (`C:\dev\playlist-creator`), chamando o Codex CLI 0.157.1 com
+`codex exec --sandbox read-only` em três rodadas: revisão adversarial de dc68418..7bb48bb (cookie cifrado, CSRF,
+`redirect_uri`, rotação do refresh token, função da Vercel, StrictMode, fluxo colar→conferir→publicar, visibilidade,
+`vercel.json`), verificação das correções e segunda verificação. O Codex não alterou arquivos. Cada correção tem teste
+de regressão que falha sem ela e passa com ela (conferido desfazendo a correção e rodando o teste).
+
+Texto original: [revisão](codex/revisao-4.md), [verificação](codex/revisao-5.md) e
+[segunda verificação](codex/revisao-6.md).
+
+**Linha de base (antes, 7bb48bb):** `npm install` ok · `npm run typecheck` ok · `npm test` 106/106 · `npm run build` ok.
+**Depois:** typecheck ok · `npm test` 129/129 (8 arquivos) · build ok.
+
+| ID | Sev. | Achado do Codex | Veredito | Correção |
+|----|------|-----------------|----------|----------|
+| APP-1 | alta | Busca manual que voltava depois de tocar em Publicar desfazia a escolha; uma nova tentativa podia publicar outra faixa e criar segunda playlist. | Procede | Plano congelado na primeira tentativa e reutilizado nas seguintes; escolha explícita ou publicação invalidam buscas em voo; conferência desabilitada após a tentativa. |
+| PUB-1 | média | Visibilidade não confirmada era mostrada como fato e nunca mais conferida. | Procede | Resultado salvo no job; `unknown`/`mismatch` reconferidos ao publicar de novo; a tela diz "visibilidade não confirmada" e oferece "Conferir visibilidade de novo". |
+| AUTH-1 | média | Duas abas renovando juntas: a rotação do refresh token fazia uma apagar o cookie novo da outra. | Procede | Renovação e saída sob Web Lock compartilhado entre abas. |
+| AUTH-2 | média | "Sair" sem internet parecia funcionar, e o login voltava ao recarregar; logout dependia da configuração do servidor. | Procede | Saída só com confirmação do servidor (senão avisa e continua conectado); logout independe de Client ID/SESSION_SECRET. |
+| AUTH-3 | média | Qualquer 400/401 do Spotify (ex.: `invalid_client` por configuração errada) apagava a sessão. | Procede | Só `invalid_grant` encerra a sessão; o resto vira 502 e mantém o cookie. |
+| AUTH-4 | baixa | Validade do cookie só no navegador: cópia antiga servia para sempre. | Procede | `exp` (renovado a cada uso, 180 dias) dentro do cookie cifrado e conferido no servidor. Cookies sem `exp` são recusados: quem já estava conectado entra de novo uma vez. |
+| NEW-AUTH-1 | média | (verificação) Renovação presa segurava a trava e o logout para sempre. | Procede | Toda chamada a `/api/auth/*` tem prazo de 15 s. |
+| NEW-AUTH-2 | média | (verificação) Sem Web Locks, renovação atrasada regravava o cookie depois do logout. | Procede | Fila local serializa renovação e saída na mesma aba. Entre abas, sem Web Locks, o risco continua; o Codex o considerou aceitável para um app pessoal (todos os navegadores atuais têm Web Locks). |
+| NEW-AUTH-3 | média | (verificação) Logout respondia "ok" por HTTP fora do loopback sem conseguir apagar o cookie `Secure`. | Procede | Checagem de HTTPS antes do logout. |
+| NEW-APP-1 | média | (verificação) Depois de cancelar e colar outra playlist, a busca atrasada da anterior podia invadir a nova. | Procede | Números de busca de um contador que nunca zera. |
+| NEW-PUB-1 | média | (verificação) "Conferir visibilidade de novo" não fazia nada em jobs antigos sem o campo. | Procede | O botão pede `retryVisibility`, que também confere jobs antigos; sem o pedido eles ficam intocados. |
+| NEW-AUTH-4 | média | (segunda verificação) Se o navegador abortasse a renovação (15 s) e o Spotify rotacionasse o token depois, o cookie novo se perdia. | Procede | O servidor desiste do Spotify em 8 s (menor que os 15 s do navegador) e responde 502 mantendo o cookie. Rotação seguida de queda de rede continua possível, como em qualquer perda de resposta. |
+
+**Áreas que o Codex considerou corretas:** AES-GCM com IV aleatório de 96 bits e tag autenticada; cookie `__Host-`,
+`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/` em produção; CSRF por POST + `X-MUM` + Origin exata (`Origin: null`
+recusado); `redirect_uri` derivado do servidor; PKCE com state/verifier validados e apagados; troca do `code` uma única
+vez no StrictMode; tokens fora de `localStorage`/`sessionStorage`; faixas ambíguas só publicadas após escolha;
+função da Vercel com `Request`/`Response` padrão; rewrite que preserva `/api/*` e `/callback`; CSP.
+
+**Pendências:**
+- A última correção (NEW-AUTH-4) não passou por nova rodada do Codex.
+- Testado no navegador real: login com o Spotify em `http://127.0.0.1:5173` (antes destas correções).
