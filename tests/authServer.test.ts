@@ -214,6 +214,12 @@ describe('proteções', () => {
     expect(cookieFrom(res)).toMatch(/^__Host-mum_rt=; .*Max-Age=0/);
   });
 
+  it('logout também exige HTTPS fora do loopback (não diz "saiu" sem apagar o cookie Secure)', async () => {
+    const res = await handleAuth(req('http://mum.example.com', 'logout'), 'logout', { clientId: '', sessionSecret: '' });
+    expect(res.status).toBe(400);
+    expect(res.headers.get('set-cookie')).toBeNull();
+  });
+
   it('logout continua exigindo POST, X-MUM e mesma origem', async () => {
     const r = req(PROD, 'logout', { headers: { origin: 'https://malicioso.example' } });
     const res = await handleAuth(r, 'logout', { clientId: '', sessionSecret: '' });

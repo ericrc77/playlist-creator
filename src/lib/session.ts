@@ -16,8 +16,23 @@ export type AuthLock = <T>(fn: () => Promise<T>) => Promise<T>;
 // renovando ao mesmo tempo mandam o mesmo refresh token; se o Spotify o rotacionar, a segunda
 // recebe invalid_grant e o servidor apaga o cookie que a primeira acabou de gravar. Com a trava, a
 // segunda aba só faz a requisição depois, já com o cookie novo.
+//
+// Sem Web Locks (navegadores antigos), uma fila local ainda serializa a própria aba: um logout
+// espera a renovação em voo terminar, e a resposta atrasada dela não regrava o cookie depois da
+// saída. Entre abas, nesse caso, sobra só o risco de rotação descrito acima.
+// Toda requisição de /api/auth/* tem tempo máximo (AUTH_TIMEOUT_MS), então a trava não fica presa.
+export function localLock(): AuthLock {
+  let tail: Promise<unknown> = Promise.resolve();
+  return <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = tail.then(fn, fn);
+    tail = run.catch(() => undefined);
+    return run;
+  };
+}
+
+const fallbackLock = localLock();
 const browserLock: AuthLock = (fn) =>
-  typeof navigator !== 'undefined' && navigator.locks ? navigator.locks.request('mum.auth', fn) : fn();
+  typeof navigator !== 'undefined' && navigator.locks ? navigator.locks.request('mum.auth', fn) : fallbackLock(fn);
 
 export class AuthSession {
   private token: AccessToken | null = null;

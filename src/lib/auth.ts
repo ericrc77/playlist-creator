@@ -86,16 +86,27 @@ export class AuthError extends Error {
   }
 }
 
+/** Tempo máximo de uma chamada a /api/auth/*. Renovação e saída dividem uma trava: uma requisição
+ * presa não pode segurá-la para sempre. */
+export const AUTH_TIMEOUT_MS = 15_000;
+
 async function postAuth(fetchFn: typeof fetch, action: string, body?: unknown): Promise<Response> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), AUTH_TIMEOUT_MS);
   try {
     return await fetchFn(`/api/auth/${action}`, {
       method: 'POST',
       credentials: 'same-origin',
       headers: { ...CSRF_HEADER, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
+      signal: abort.signal,
     });
   } catch {
-    throw new AuthError('Falha de conexão com o servidor do aplicativo.');
+    throw new AuthError(
+      abort.signal.aborted ? 'O servidor do aplicativo não respondeu a tempo.' : 'Falha de conexão com o servidor do aplicativo.',
+    );
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -125,6 +125,9 @@ export async function handleAuth(request: Request, action: string, env: AuthEnv)
   const url = new URL(request.url);
   const problem = csrfProblem(request, url);
   if (problem) return problem;
+  // Antes do logout também: por HTTP o navegador não apagaria o cookie Secure de produção, e
+  // responder "ok" faria o app dizer que saiu.
+  if (!isLoopbackHttp(url) && url.protocol !== 'https:') return fail(400, 'insecure', 'Use HTTPS.');
 
   // Sair só apaga o cookie: não depende de Client ID nem de SESSION_SECRET e precisa funcionar
   // mesmo com o servidor mal configurado.
@@ -134,7 +137,6 @@ export async function handleAuth(request: Request, action: string, env: AuthEnv)
   if (!env.sessionSecret || env.sessionSecret.length < 32) {
     return fail(500, 'config', 'SESSION_SECRET não está configurado no servidor (mínimo de 32 caracteres).');
   }
-  if (!isLoopbackHttp(url) && url.protocol !== 'https:') return fail(400, 'insecure', 'Use HTTPS.');
 
   const fetchFn = env.fetchFn ?? fetch;
   const now = env.now ?? Date.now;

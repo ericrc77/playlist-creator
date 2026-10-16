@@ -1,5 +1,5 @@
-import { beginLogin, codeChallenge, completeLogin, missingScopes, randomString, refreshAccess, SCOPES } from '../src/lib/auth';
-import { AuthSession } from '../src/lib/session';
+import { AUTH_TIMEOUT_MS, AuthError, beginLogin, codeChallenge, completeLogin, missingScopes, randomString, refreshAccess, SCOPES } from '../src/lib/auth';
+import { AuthSession, localLock } from '../src/lib/session';
 import { jsonResponse, MemoryStore } from './helpers';
 
 const cfg = { clientId: 'a'.repeat(32), redirectUri: 'http://127.0.0.1:5173/callback' };
@@ -155,6 +155,56 @@ describe('AuthSession', () => {
     await expect(pending).rejects.toThrow();
     expect(s.current).toBeNull();
     expect(onChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
+describe('renovação e saída na mesma aba', () => {
+  it('sem Web Locks: o logout espera a renovação em voo e a resposta atrasada não regrava o cookie', async () => {
+    expect((navigator as Navigator & { locks?: unknown }).locks).toBeUndefined(); // jsdom: caminho de fallback
+    // O "cookie" muda na ordem em que as respostas chegam, como no navegador.
+    const jar = { cookie: 'RT1' as string | null };
+    let finishRefresh!: () => void;
+    const fetchFn = vi.fn(async (url: string) => {
+      if (url.endsWith('/logout')) {
+        jar.cookie = null;
+        return jsonResponse(200, { ok: true });
+      }
+      await new Promise<void>((r) => (finishRefresh = r));
+      jar.cookie = 'RT2';
+      return jsonResponse(200, { accessToken: 'AT2', expiresAt: 10_000_000, scope: '' });
+    });
+    const s = new AuthSession(() => {}, fetchFn as unknown as typeof fetch, () => 0); // trava padrão
+    const refreshing = s.refresh().catch(() => undefined);
+    const leaving = s.logout();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(fetchFn).toHaveBeenCalledTimes(1); // o logout ainda não saiu: espera a renovação
+    finishRefresh();
+    await refreshing;
+    await leaving;
+    expect(jar.cookie).toBeNull();
+    expect(s.current).toBeNull();
+  });
+
+  it('renovação presa não segura o logout para sempre: as chamadas têm tempo máximo', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchFn = vi.fn((url: string, init?: RequestInit) =>
+        url.endsWith('/logout')
+          ? Promise.resolve(jsonResponse(200, { ok: true }))
+          : new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))),
+      );
+      const s = new AuthSession(() => {}, fetchFn as unknown as typeof fetch, () => 0, localLock());
+      const refreshing = s.refresh();
+      const refreshError = refreshing.catch((e: Error) => e);
+      const leaving = s.logout();
+      await vi.advanceTimersByTimeAsync(AUTH_TIMEOUT_MS + 1);
+      await leaving;
+      expect((await refreshError) as Error).toBeInstanceOf(AuthError);
+      expect(((await refreshError) as Error).message).toMatch(/não respondeu a tempo/);
+      expect(s.current).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
