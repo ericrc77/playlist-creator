@@ -1,5 +1,5 @@
 // Contrato ChatGPT → aplicativo, versão 1.0.
-// Fonte: 02-CONTRATO-DE-PLAYLIST.md (ver docs/CONTRATO.md no repositório).
+// Descrito em docs/CONTRACT.md.
 
 export const SUPPORTED_SCHEMA_VERSIONS = ['1.0'] as const;
 
