@@ -2,7 +2,7 @@
   "name": "meu-universo-musical-publicador",
   "private": true,
   "version": "0.1.0",
-  "description": "Publicador de playlists aprovadas no ChatGPT para o Spotify (API oficial, OAuth PKCE).",
+  "description": "Publish an approved JSON track list to Spotify with OAuth PKCE, match review and resumable publishing.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,23 +10,34 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lint": "eslint . --max-warnings 0",
+    "check": "npm run lint && npm run typecheck && npm test && vite build"
   },
   "dependencies": {
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
     "@types/node": "^22.20.5",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
-    "@vitejs/plugin-react": "^4.5.0",
-    "jsdom": "^26.1.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "eslint": "^10.16.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "jsdom": "^29.1.1",
     "typescript": "~5.8.3",
-    "vite": "^6.3.5",
-    "vitest": "^3.2.0"
-  }
+    "typescript-eslint": "^8.74.0",
+    "vite": "^8.4.0",
+    "vitest": "^5.1.2"
+  },
+  "engines": {
+    "node": "^22.13.0 || >=24.0.0"
+  },
+  "license": "MIT"
 }

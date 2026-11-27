@@ -1,7 +1,7 @@
 /// <reference types="vitest/config" />
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
-import { authDevPlugin } from './server/devMiddleware';
+import { authDevPlugin } from './server/devMiddleware.js';
 
 // O Spotify não aceita "localhost" como redirect URI: use o endereço de loopback explícito.
 export default defineConfig(({ mode }) => ({
