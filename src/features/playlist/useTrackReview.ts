@@ -39,6 +39,7 @@ export function useTrackReview(client: SpotifyClient, isLocked: () => boolean) {
             choice: match.status === 'exact' && match.selected ? { kind: 'track', track: match.selected } : undefined,
           }));
         } catch (e) {
+          if (run.current !== id) return; // o erro é de uma playlist que já foi descartada
           update(row.req.index, (r) => ({ ...r, error: (e as Error).message }));
         }
       }
