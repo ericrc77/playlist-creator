@@ -1,6 +1,7 @@
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { DemoApp } from './demo/DemoApp';
 import { completeLogin, type AccessToken } from './lib/auth';
 import { AuthSession, readConfig } from './lib/session';
 import './styles.css';
@@ -64,8 +65,7 @@ function Root() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <Root />
-  </StrictMode>,
-);
+// /demo nunca monta <Root />, então não há tentativa de sessão nem chamada a /api/auth.
+const isDemo = /^\/demo\/?$/.test(window.location.pathname);
+
+createRoot(document.getElementById('root')!).render(<StrictMode>{isDemo ? <DemoApp /> : <Root />}</StrictMode>);
