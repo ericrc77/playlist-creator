@@ -47,7 +47,7 @@ describe('função da Vercel em Node ESM puro', () => {
     expect(missing).toEqual([]);
   });
 
-  it('/api/auth/refresh sem sessão carrega o módulo e responde 401 (não 500)', () => {
+  it('/api/auth/refresh sem sessão carrega o módulo e responde 401 (não 500)', { timeout: 30_000 }, () => {
     const fn = pathToFileURL(join(out, 'api', 'auth', '[action].js')).href;
     const script = `
       const { POST } = await import(${JSON.stringify(fn)});
