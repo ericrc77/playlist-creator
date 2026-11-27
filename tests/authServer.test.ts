@@ -38,11 +38,15 @@ function cookieFrom(res: Response) {
 
 describe('cookie cifrado', () => {
   it('abre só com o mesmo segredo e recusa adulteração', async () => {
-    const sealed = await sealSession(SECRET, { rt: 'RT', scope: 'x' });
-    expect(sealed).not.toContain('RT');
-    expect(await openSession(SECRET, sealed)).toEqual({ rt: 'RT', scope: 'x' });
+    // O ponto não existe em base64url: o texto cifrado nunca contém o marcador por acaso.
+    const rt = 'refresh.token';
+    const sealed = await sealSession(SECRET, { rt, scope: 'x' });
+    expect(sealed).not.toContain(rt);
+    expect(await openSession(SECRET, sealed)).toEqual({ rt, scope: 'x' });
     expect(await openSession('outro'.repeat(10), sealed)).toBeNull();
-    const tampered = sealed.slice(0, -2) + (sealed.endsWith('A') ? 'B' : 'A') + sealed.slice(-1);
+    // Troca um caractere do meio (todos os 6 bits contam) por outro garantidamente diferente.
+    const mid = Math.floor(sealed.length / 2);
+    const tampered = sealed.slice(0, mid) + (sealed[mid] === 'A' ? 'B' : 'A') + sealed.slice(mid + 1);
     expect(await openSession(SECRET, tampered)).toBeNull();
   });
 
